@@ -115,9 +115,10 @@ void AddressTable::UpdateValues(const ProcessManager& pm) {
 void AddressTable::Save(const char* path) const {
     std::ofstream f(path);
     if (!f) return;
+    f << "MWT2\t1\n";
     for (auto& e : m_entries) {
-        f << (int)e.type << " " << e.address << " " << e.frozen << " "
-          << e.editValue << " " << e.description << "\n";
+        f << (int)e.type << "\t" << e.address << "\t" << e.frozen << "\t"
+          << e.editValue << "\t" << e.description << "\n";
     }
 }
 
@@ -126,22 +127,50 @@ void AddressTable::Load(const char* path) {
     if (!f) return;
     m_entries.clear();
     std::string line;
+    bool firstLine = true;
+    bool newFormat = false;
     while (std::getline(f, line)) {
-        std::istringstream iss(line);
-        int typeInt, frozen;
-        uintptr_t addr;
-        if (iss >> typeInt >> addr >> frozen) {
+        if (firstLine) {
+            firstLine = false;
+            if (line.rfind("MWT2\t", 0) == 0) {
+                newFormat = true;
+                continue;
+            }
+        }
+        if (newFormat) {
+            std::istringstream iss(line);
+            std::string typeStr, addrStr, frozenStr, valStr, descStr;
+            std::getline(iss, typeStr, '\t');
+            std::getline(iss, addrStr, '\t');
+            std::getline(iss, frozenStr, '\t');
+            std::getline(iss, valStr, '\t');
+            std::getline(iss, descStr);
             AddressEntry e = {};
-            e.type = (ValueType)typeInt;
-            e.address = addr;
-            e.frozen = frozen != 0;
-            std::string val;
-            iss >> val;
-            strncpy(e.editValue, val.c_str(), sizeof(e.editValue) - 1);
-            std::string desc;
-            std::getline(iss >> std::ws, desc);
-            strncpy(e.description, desc.c_str(), sizeof(e.description) - 1);
+            try {
+                e.type = (ValueType)std::stoi(typeStr);
+                e.address = (uintptr_t)std::stoull(addrStr);
+                e.frozen = (std::stoi(frozenStr) != 0);
+            } catch (...) { continue; }
+            strncpy(e.editValue, valStr.c_str(), sizeof(e.editValue) - 1);
+            strncpy(e.description, descStr.c_str(), sizeof(e.description) - 1);
             m_entries.push_back(e);
+        } else {
+            std::istringstream iss(line);
+            int typeInt, frozen;
+            uintptr_t addr;
+            if (iss >> typeInt >> addr >> frozen) {
+                AddressEntry e = {};
+                e.type = (ValueType)typeInt;
+                e.address = addr;
+                e.frozen = frozen != 0;
+                std::string val;
+                iss >> val;
+                strncpy(e.editValue, val.c_str(), sizeof(e.editValue) - 1);
+                std::string desc;
+                std::getline(iss >> std::ws, desc);
+                strncpy(e.description, desc.c_str(), sizeof(e.description) - 1);
+                m_entries.push_back(e);
+            }
         }
     }
 }
