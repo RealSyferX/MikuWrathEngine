@@ -310,12 +310,9 @@ void MemoryViewer::OnKeyDown(WPARAM key) {
 // Rendering
 // ============================================================
 void MemoryViewer::OnPaint(Gdiplus::Graphics* g, int w, int h) {
-    // Reset input flags for this frame
     m_ui.g = g;
     m_ui.width = w;
     m_ui.height = h;
-    m_ui.hasCharInput = false;
-    m_ui.keyPressed = false;
 
     // Background
     UI::FillRect(g, {0, 0, w, h}, Theme::BG_MAIN());
@@ -336,6 +333,21 @@ void MemoryViewer::OnPaint(Gdiplus::Graphics* g, int w, int h) {
 
     RECT hexRc = { 2, 34 + halfH, w - 2, h - 2 };
     RenderHex(g, hexRc);
+
+    if (m_showPatchPopup) {
+        RECT popupRc = { w/2 - 175, h/2 - 60, w/2 + 175, h/2 + 60 };
+        RenderPatchPopup(g, popupRc);
+    }
+
+    // Reset input flags at the END of the frame so all widgets can
+    // process this frame's input before it is cleared.
+    m_ui.mousePressed = false;
+    m_ui.mouseReleased = false;
+    m_ui.mouseDoubleClicked = false;
+    m_ui.mouseRightPressed = false;
+    m_ui.hasCharInput = false;
+    m_ui.keyPressed = false;
+    m_ui.mouseWheel = 0;
 }
 
 void MemoryViewer::RenderAddrBar(Gdiplus::Graphics* g, RECT& rc) {
