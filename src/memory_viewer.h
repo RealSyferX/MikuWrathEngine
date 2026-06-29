@@ -58,6 +58,23 @@ private:
     uintptr_t m_patchAddr = 0;
     size_t m_patchMaxLen = 0;
 
+    // AOB Signature maker state
+    bool m_showSigMaker = false;
+    uintptr_t m_sigAddr = 0;
+    static const int MAX_SIG_BYTES = 64;
+    uint8_t m_sigBytes[MAX_SIG_BYTES] = {};
+    bool m_sigWildcard[MAX_SIG_BYTES] = {};
+    int m_sigLen = 16;
+    char m_sigOutput[256] = {};
+
+    // Assemble / patch-by-bytes dialog state
+    char m_asmBuf[256] = {};
+    bool m_showAsmPopup = false;
+    uintptr_t m_asmAddr = 0;
+    size_t m_asmMaxLen = 0;
+    char m_asmError[256] = {};
+    char m_asmCurrentInst[128] = {};
+
     void OnPaint(Gdiplus::Graphics* g, int w, int h);
     void OnMouseDown(int x, int y, bool right, bool dbl);
     void OnMouseWheel(int delta);
@@ -68,6 +85,8 @@ private:
     void RenderDisasm(Gdiplus::Graphics* g, RECT& rc);
     void RenderHex(Gdiplus::Graphics* g, RECT& rc);
     void RenderPatchPopup(Gdiplus::Graphics* g, RECT& rc);
+    void RenderSigMaker(Gdiplus::Graphics* g, RECT& rc);
+    void RenderAsmPopup(Gdiplus::Graphics* g, RECT& rc);
 
     void RefreshDisasm();
     void ScrollHex(int lines);

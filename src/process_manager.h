@@ -30,9 +30,17 @@ public:
     };
     std::vector<ModuleInfo> EnumerateModules() const;
 
+    // Module-relative address formatting/parsing
+    std::string FormatAddress(uintptr_t addr) const;
+    uintptr_t ParseAddressString(const std::string& str) const;
+
 private:
     HANDLE m_hProcess = nullptr;
     DWORD m_pid = 0;
     std::string m_processName;
     bool m_is64Bit = false;
+
+    // Lazy module cache for FormatAddress (avoids re-enumerating on every call)
+    mutable std::vector<ModuleInfo> m_cachedModules;
+    mutable bool m_modulesDirty = true;
 };

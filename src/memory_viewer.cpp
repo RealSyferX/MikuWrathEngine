@@ -184,21 +184,19 @@ void MemoryViewer::GoToAddress(uintptr_t addr) {
 }
 
 void MemoryViewer::ParseAndGo() {
-    char* end = nullptr;
-    unsigned long long val = strtoull(m_addrBuf, &end, 16);
-    if (end != m_addrBuf) {
-        m_hexAddr = (uintptr_t)val;
-        m_disasmAddr = (uintptr_t)val;
-        RefreshDisasm();
-    }
+    if (!m_pm || !m_pm->IsOpen()) return;
+    uintptr_t val = m_pm->ParseAddressString(m_addrBuf);
+    m_hexAddr = val;
+    m_disasmAddr = val;
+    RefreshDisasm();
 }
 
 void MemoryViewer::RefreshDisasm() {
     m_disasmView.clear();
     if (!m_pm || !m_pm->IsOpen() || !m_dis || !m_dis->IsInitialized()) return;
-    uint8_t buf[512];
+    uint8_t buf[1024];
     if (m_pm->Read(m_disasmAddr, buf, sizeof(buf))) {
-        m_disasmView = m_dis->Disassemble(m_disasmAddr, buf, sizeof(buf), 32);
+        m_disasmView = m_dis->Disassemble(m_disasmAddr, buf, sizeof(buf), 64);
     }
 }
 
@@ -215,20 +213,32 @@ void MemoryViewer::ScrollHex(int lines) {
 
 void MemoryViewer::ScrollDisasm(int lines) {
     if (!m_dis || !m_dis->IsInitialized()) return;
+    if (!m_pm || !m_pm->IsOpen()) return;
     int count = std::min(std::abs(lines), 50);
     if (lines > 0) {
         for (int i = 0; i < count; i++) {
             if (m_disasmView.size() > 1) {
                 m_disasmAddr = m_disasmView[1].address;
                 m_disasmView.erase(m_disasmView.begin());
-                if (m_disasmView.size() < 8 && !m_disasmView.empty()) {
+                // Refill cache when running low (threshold 16, read 32 more)
+                if (m_disasmView.size() < 16 && !m_disasmView.empty()) {
                     uintptr_t nextAddr = m_disasmView.back().address + m_disasmView.back().size;
-                    uint8_t buf[256];
+                    uint8_t buf[1024];
                     if (m_pm->Read(nextAddr, buf, sizeof(buf))) {
-                        auto more = m_dis->Disassemble(nextAddr, buf, sizeof(buf), 1);
-                        if (!more.empty()) m_disasmView.push_back(more[0]);
+                        auto more = m_dis->Disassemble(nextAddr, buf, sizeof(buf), 32);
+                        m_disasmView.insert(m_disasmView.end(), more.begin(), more.end());
                     }
                 }
+            } else if (m_disasmView.size() == 1) {
+                // Only one instruction left — advance past it and re-read
+                m_disasmAddr = m_disasmView[0].address + m_disasmView[0].size;
+                m_disasmView.clear();
+                uint8_t buf[1024];
+                if (m_pm->Read(m_disasmAddr, buf, sizeof(buf))) {
+                    m_disasmView = m_dis->Disassemble(m_disasmAddr, buf, sizeof(buf), 64);
+                }
+            } else {
+                break; // empty, can't scroll
             }
         }
     } else if (lines < 0) {
@@ -272,6 +282,8 @@ void MemoryViewer::ShowContextMenu(int x, int y, uintptr_t addr, bool isDisasm, 
     if (isDisasm) {
         AppendMenuA(menu, MF_STRING, 2, "NOP This Instruction");
         AppendMenuA(menu, MF_STRING, 3, "Patch Bytes...");
+        AppendMenuA(menu, MF_STRING, 9, "AOB Signature...");
+        AppendMenuA(menu, MF_STRING, 10, "Assemble...");
         AppendMenuA(menu, MF_SEPARATOR, 0, nullptr);
     } else {
         AppendMenuA(menu, MF_STRING, 4, "Edit Bytes...");
@@ -300,6 +312,33 @@ void MemoryViewer::ShowContextMenu(int x, int y, uintptr_t addr, bool isDisasm, 
     case 8: {
         char buf[32]; snprintf(buf, sizeof(buf), "0x%llX", (unsigned long long)addr);
         CopyToClipboard(m_hwnd, buf);
+    } break;
+    case 9: {
+        // AOB Signature maker
+        m_sigAddr = addr;
+        m_sigLen = std::min((int)instSize * 4, MAX_SIG_BYTES);
+        if (m_sigLen < 8) m_sigLen = 16;
+        if (m_pm && m_pm->IsOpen()) {
+            m_pm->Read(m_sigAddr, m_sigBytes, m_sigLen);
+        }
+        memset(m_sigWildcard, 0, sizeof(m_sigWildcard));
+        m_showSigMaker = true;
+    } break;
+    case 10: {
+        // Assemble / change opcode dialog
+        m_asmAddr = addr;
+        m_asmMaxLen = instSize;
+        m_asmBuf[0] = '\0';
+        m_asmError[0] = '\0';
+        // Find current instruction text
+        for (auto& inst : m_disasmView) {
+            if (inst.address == addr) {
+                snprintf(m_asmCurrentInst, sizeof(m_asmCurrentInst), "%s %s",
+                         inst.mnemonic, inst.opStr);
+                break;
+            }
+        }
+        m_showAsmPopup = true;
     } break;
     }
     InvalidateRect(m_hwnd, nullptr, FALSE);
@@ -479,10 +518,10 @@ void MemoryViewer::OnKeyDown(WPARAM key) {
         return;
     }
 
-    // Only scroll if not editing text
-    if (m_ui.focusId == 1000) {
+    // Only scroll if not editing text and no modal popup is open
+    if (m_ui.focusId == 1000 || m_showPatchPopup || m_showSigMaker || m_showAsmPopup) {
         InvalidateRect(m_hwnd, nullptr, FALSE);
-        return; // address bar is focused
+        return; // text input focused or popup open
     }
 
     switch (key) {
@@ -527,6 +566,16 @@ void MemoryViewer::OnPaint(Gdiplus::Graphics* g, int w, int h) {
     if (m_showPatchPopup) {
         RECT popupRc = { w/2 - 175, h/2 - 60, w/2 + 175, h/2 + 60 };
         RenderPatchPopup(g, popupRc);
+    }
+
+    if (m_showSigMaker) {
+        RECT sigRc = { w/2 - 250, h/2 - 100, w/2 + 250, h/2 + 100 };
+        RenderSigMaker(g, sigRc);
+    }
+
+    if (m_showAsmPopup) {
+        RECT asmRc = { w/2 - 200, h/2 - 70, w/2 + 200, h/2 + 70 };
+        RenderAsmPopup(g, asmRc);
     }
 
     // Reset input flags at the END of the frame so all widgets can
@@ -598,11 +647,13 @@ void MemoryViewer::RenderDisasm(Gdiplus::Graphics* g, RECT& rc) {
 
     for (size_t i = 0; i < m_disasmView.size() && y < rc.bottom; i++) {
         auto& inst = m_disasmView[i];
-        int pos = snprintf(line, sizeof(line), "%016llX  ", (unsigned long long)inst.address);
+        // Module-relative address, padded to 30 chars + 2 spaces
+        std::string addrStr = m_pm->FormatAddress(inst.address);
+        int pos = snprintf(line, sizeof(line), "%-30.30s  ", addrStr.c_str());
         int bl = std::min((int)inst.size, 8);
         for (int j = 0; j < bl; j++) pos += snprintf(line+pos, sizeof(line)-pos, "%02X ", inst.bytes[j]);
         for (int j = bl; j < 8; j++) pos += snprintf(line+pos, sizeof(line)-pos, "   ");
-        while (pos < 52) line[pos++] = ' ';
+        while (pos < 64) line[pos++] = ' ';
         pos += snprintf(line+pos, sizeof(line)-pos, "%s %s", inst.mnemonic, inst.opStr);
 
         Gdiplus::Color col = (inst.address == m_selectedAddr) ? Theme::BG_SELECTED() : Theme::BG_PANEL();
@@ -610,11 +661,13 @@ void MemoryViewer::RenderDisasm(Gdiplus::Graphics* g, RECT& rc) {
         UI::FillRect(g, lineRc, col);
         UI::DrawText(g, rc.left + 2, y + 1, line, Theme::CLR_TEXT());
 
-        // Double-click to follow in hex
-        if (m_ui.PtInRect(lineRc) && m_ui.mouseDoubleClicked) {
+        // Double-click to follow in hex (disabled when modal popups are open)
+        if (!m_showPatchPopup && !m_showSigMaker && !m_showAsmPopup &&
+            m_ui.PtInRect(lineRc) && m_ui.mouseDoubleClicked) {
             m_hexAddr = inst.address;
         }
-        if (m_ui.PtInRect(lineRc) && m_ui.mousePressed) {
+        if (!m_showPatchPopup && !m_showSigMaker && !m_showAsmPopup &&
+            m_ui.PtInRect(lineRc) && m_ui.mousePressed) {
             m_selectedAddr = inst.address;
         }
 
@@ -643,14 +696,15 @@ void MemoryViewer::RenderHex(Gdiplus::Graphics* g, RECT& rc) {
 
     // Measure character width for hit-testing and highlight positioning.
     // Consolas 9px is monospaced, so every glyph shares the same advance width.
+    // Use 32-char sample for accuracy with the wider 30-char address column.
     int refW = 0, refH = 0;
-    UI::MeasureText(g, "00000000000000000000", nullptr, &refW, &refH); // 20 chars
-    int charW = (refW > 0) ? (refW + 10) / 20 : 6; // round, fallback to 6px
+    UI::MeasureText(g, "00000000000000000000000000000000", nullptr, &refW, &refH); // 32 chars
+    int charW = (refW > 0) ? (refW + 16) / 32 : 6; // round, fallback to 6px
     int lineH = 16;
 
-    // Layout: "ADDR  " (18 chars) | hex bytes ("XX " = 3 chars each) | " |" (2 chars) | ASCII (1 char each) | "|"
+    // Layout: "ADDR  " (32 chars = 30 padded address + 2 spaces) | hex bytes ("XX " = 3 chars each) | " |" (2 chars) | ASCII (1 char each) | "|"
     int textX = rc.left + 2;
-    int hexStartX = textX + 18 * charW;              // address prefix = 16 hex + 2 spaces
+    int hexStartX = textX + 32 * charW;               // address prefix = 30 chars + 2 spaces
     int byteW = 3 * charW;                            // each byte = "XX "
     int sepW = 2 * charW;                              // " |" (space + pipe before ASCII)
     int asciiStartX = hexStartX + m_hexCols * byteW + sepW;
@@ -660,7 +714,9 @@ void MemoryViewer::RenderHex(Gdiplus::Graphics* g, RECT& rc) {
 
     for (int line = 0; line < m_hexLines && y < rc.bottom; line++) {
         uintptr_t lineAddr = m_hexAddr + (uintptr_t)(line * m_hexCols);
-        int pos = snprintf(out, sizeof(out), "%016llX  ", (unsigned long long)lineAddr);
+        // Module-relative address, padded to 30 chars + 2 spaces
+        std::string addrStr = m_pm->FormatAddress(lineAddr);
+        int pos = snprintf(out, sizeof(out), "%-30.30s  ", addrStr.c_str());
         for (int col = 0; col < m_hexCols; col++)
             pos += snprintf(out+pos, sizeof(out)-pos, "%02X ", buf[line*m_hexCols+col]);
         out[pos++] = ' '; out[pos++] = '|';
@@ -694,7 +750,8 @@ void MemoryViewer::RenderHex(Gdiplus::Graphics* g, RECT& rc) {
         UI::DrawText(g, textX, y + 1, out, Theme::CLR_TEXT());
 
         // Click-to-select: compute which byte was clicked (hex or ASCII column)
-        if (m_ui.mousePressed) {
+        // Disabled when modal popups are open to prevent background selection
+        if (m_ui.mousePressed && !m_showPatchPopup && !m_showSigMaker && !m_showAsmPopup) {
             int mx = m_ui.mouse.x;
             int my = m_ui.mouse.y;
             if (my >= y && my < y + lineH) {
@@ -741,5 +798,197 @@ void MemoryViewer::RenderPatchPopup(Gdiplus::Graphics* g, RECT& rc) {
     if (UI::Button(m_ui, 2002, cancelBtn, "Cancel")) {
         m_showPatchPopup = false;
         m_patchBuf[0] = '\0';
+    }
+}
+
+// ============================================================
+// AOB Signature Maker — build byte signatures with wildcards
+// ============================================================
+void MemoryViewer::RenderSigMaker(Gdiplus::Graphics* g, RECT& rc) {
+    if (!m_showSigMaker) return;
+
+    UI::FillRect(g, rc, Theme::BG_PANEL());
+    UI::DrawNeonBorder(g, rc.left, rc.top, rc.right - rc.left - 1,
+                       rc.bottom - rc.top - 1, Theme::NEON());
+
+    // Title with module-relative address
+    char title[256];
+    if (m_pm && m_pm->IsOpen()) {
+        snprintf(title, sizeof(title), "AOB Signature at %s",
+                 m_pm->FormatAddress(m_sigAddr).c_str());
+    } else {
+        snprintf(title, sizeof(title), "AOB Signature Maker");
+    }
+    UI::DrawText(g, rc.left + 8, rc.top + 4, title, Theme::CLR_TEXT());
+
+    // Length controls
+    UI::DrawText(g, rc.left + 8, rc.top + 24, "Len:", Theme::CLR_DIM());
+    RECT minusBtn = { rc.left + 42, rc.top + 22, rc.left + 62, rc.top + 40 };
+    if (UI::Button(m_ui, 4000, minusBtn, "-")) {
+        if (m_sigLen > 4) m_sigLen--;
+    }
+    char lenStr[16];
+    snprintf(lenStr, sizeof(lenStr), "%d", m_sigLen);
+    UI::DrawText(g, rc.left + 70, rc.top + 24, lenStr, Theme::CLR_TEXT());
+    RECT plusBtn = { rc.left + 90, rc.top + 22, rc.left + 110, rc.top + 40 };
+    if (UI::Button(m_ui, 4001, plusBtn, "+")) {
+        if (m_sigLen < MAX_SIG_BYTES) m_sigLen++;
+    }
+
+    // Refresh button (re-read is also done automatically each frame)
+    RECT refreshBtn = { rc.right - 90, rc.top + 22, rc.right - 10, rc.top + 40 };
+    if (UI::Button(m_ui, 4002, refreshBtn, "Refresh")) {
+        /* Bytes are re-read below each frame */
+    }
+
+    // Re-read bytes each frame to keep the display live
+    if (m_pm && m_pm->IsOpen()) {
+        m_pm->Read(m_sigAddr, m_sigBytes, m_sigLen);
+    }
+
+    // Byte grid — 16 per row, each cell clickable to toggle wildcard
+    int cellW = 28;
+    int cellH = 16;
+    int gridX = rc.left + 8;
+    int gridY = rc.top + 46;
+    int bytesPerRow = 16;
+
+    for (int i = 0; i < m_sigLen; i++) {
+        int row = i / bytesPerRow;
+        int col = i % bytesPerRow;
+        int x = gridX + col * cellW;
+        int y = gridY + row * cellH;
+
+        RECT cellRc = { x, y, x + cellW - 2, y + cellH };
+        bool hovered = m_ui.PtInRect(cellRc);
+
+        Gdiplus::Color bg = m_sigWildcard[i] ? Theme::BG_SELECTED() :
+                            (hovered ? Theme::BG_HOVER() : Theme::BG_CONTROL());
+        UI::FillRect(g, cellRc, bg);
+        UI::DrawRect(g, cellRc, Theme::BORDER());
+
+        char byteStr[4];
+        if (m_sigWildcard[i]) {
+            snprintf(byteStr, sizeof(byteStr), "??");
+        } else {
+            snprintf(byteStr, sizeof(byteStr), "%02X", m_sigBytes[i]);
+        }
+        Gdiplus::Color txtCol = m_sigWildcard[i] ? Theme::CLR_YELLOW() : Theme::CLR_TEXT();
+        UI::DrawText(g, x + 5, y + 1, byteStr, txtCol);
+
+        // Click toggles wildcard
+        if (hovered && m_ui.mousePressed) {
+            m_sigWildcard[i] = !m_sigWildcard[i];
+        }
+    }
+
+    // Generate AOB string from bytes + wildcards
+    std::string sig;
+    for (int i = 0; i < m_sigLen; i++) {
+        if (i > 0) sig += " ";
+        if (m_sigWildcard[i]) {
+            sig += "??";
+        } else {
+            char buf[4];
+            snprintf(buf, sizeof(buf), "%02X", m_sigBytes[i]);
+            sig += buf;
+        }
+    }
+    strncpy(m_sigOutput, sig.c_str(), sizeof(m_sigOutput) - 1);
+    m_sigOutput[sizeof(m_sigOutput) - 1] = '\0';
+
+    // Show AOB string
+    UI::DrawText(g, rc.left + 8, rc.top + 120, "Signature:", Theme::CLR_DIM());
+    UI::DrawText(g, rc.left + 70, rc.top + 120, m_sigOutput, Theme::CLR_GREEN());
+
+    // Copy button
+    RECT copyBtn = { rc.right - 90, rc.top + 118, rc.right - 10, rc.top + 138 };
+    if (UI::Button(m_ui, 4003, copyBtn, "Copy")) {
+        CopyToClipboard(m_hwnd, m_sigOutput);
+    }
+
+    // Close button
+    RECT closeBtn = { rc.right - 90, rc.top + 142, rc.right - 10, rc.top + 162 };
+    if (UI::Button(m_ui, 4004, closeBtn, "Close")) {
+        m_showSigMaker = false;
+    }
+}
+
+// ============================================================
+// Assemble Dialog — change opcode by patching hex bytes
+// (No Keystone dependency; accepts hex like "90 90 EB 05")
+// ============================================================
+void MemoryViewer::RenderAsmPopup(Gdiplus::Graphics* g, RECT& rc) {
+    if (!m_showAsmPopup) return;
+
+    UI::FillRect(g, rc, Theme::BG_PANEL());
+    UI::DrawNeonBorder(g, rc.left, rc.top, rc.right - rc.left - 1,
+                       rc.bottom - rc.top - 1, Theme::NEON());
+
+    // Title with module-relative address
+    char label[256];
+    if (m_pm && m_pm->IsOpen()) {
+        snprintf(label, sizeof(label), "Assemble at %s",
+                 m_pm->FormatAddress(m_asmAddr).c_str());
+    } else {
+        snprintf(label, sizeof(label), "Assemble");
+    }
+    UI::DrawText(g, rc.left + 8, rc.top + 4, label, Theme::CLR_TEXT());
+
+    // Current instruction (for reference)
+    UI::DrawText(g, rc.left + 8, rc.top + 22, "Current:", Theme::CLR_DIM());
+    UI::DrawText(g, rc.left + 70, rc.top + 22, m_asmCurrentInst, Theme::CLR_YELLOW());
+
+    // New bytes input (hex)
+    UI::DrawText(g, rc.left + 8, rc.top + 44, "Bytes:", Theme::CLR_DIM());
+    if (m_asmBuf[0] == '\0' && m_ui.focusId != 3000) {
+        UI::DrawText(g, rc.left + 72, rc.top + 45, "e.g. 90 90 EB 05", Theme::CLR_DIM());
+    }
+    UI::TextInput(m_ui, 3000, {rc.left + 70, rc.top + 42, rc.right - 10, rc.top + 64},
+                  m_asmBuf, sizeof(m_asmBuf));
+
+    // Error display
+    if (m_asmError[0]) {
+        UI::DrawText(g, rc.left + 8, rc.top + 68, m_asmError, Theme::CLR_RED());
+    }
+
+    // Determine if we should assemble (button click or Enter key)
+    bool doAssemble = false;
+    RECT asmBtn = { rc.right - 190, rc.top + 90, rc.right - 100, rc.top + 112 };
+    if (UI::Button(m_ui, 3001, asmBtn, "Assemble")) {
+        doAssemble = true;
+    }
+    if (m_ui.focusId == 3000 && m_ui.keyPressed && m_ui.keyCode == VK_RETURN) {
+        doAssemble = true;
+    }
+
+    if (doAssemble) {
+        // Parse hex bytes and write to target process
+        std::vector<uint8_t> bytes;
+        std::istringstream iss(m_asmBuf);
+        std::string tok;
+        while (iss >> tok) {
+            bytes.push_back((uint8_t)strtoul(tok.c_str(), nullptr, 16));
+        }
+        if (bytes.empty()) {
+            snprintf(m_asmError, sizeof(m_asmError), "No valid bytes entered");
+        } else if (!m_pm || !m_pm->IsOpen()) {
+            snprintf(m_asmError, sizeof(m_asmError), "No process open");
+        } else if (m_pm->Write(m_asmAddr, bytes.data(), bytes.size())) {
+            m_showAsmPopup = false;
+            m_asmBuf[0] = '\0';
+            m_asmError[0] = '\0';
+            RefreshDisasm();
+        } else {
+            snprintf(m_asmError, sizeof(m_asmError), "Write failed");
+        }
+    }
+
+    // Cancel button
+    RECT cancelBtn = { rc.right - 90, rc.top + 90, rc.right - 10, rc.top + 112 };
+    if (UI::Button(m_ui, 3002, cancelBtn, "Cancel")) {
+        m_showAsmPopup = false;
+        m_asmBuf[0] = '\0';
+        m_asmError[0] = '\0';
     }
 }

@@ -2,6 +2,9 @@
 #include <tlhelp32.h>
 #include <psapi.h>
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <cctype>
 
 #pragma comment(lib, "psapi.lib")
 
@@ -70,6 +73,7 @@ bool ProcessManager::OpenTarget(DWORD pid) {
     m_is64Bit = false;
 #endif
 
+    m_modulesDirty = true;
     return true;
 }
 
@@ -81,6 +85,8 @@ void ProcessManager::CloseTarget() {
     m_pid = 0;
     m_processName.clear();
     m_is64Bit = false;
+    m_modulesDirty = true;
+    m_cachedModules.clear();
 }
 
 bool ProcessManager::Read(uintptr_t addr, void* buf, size_t size) const {
@@ -187,4 +193,41 @@ std::vector<ProcessManager::ModuleInfo> ProcessManager::EnumerateModules() const
         }
     }
     return mods;
+}
+
+std::string ProcessManager::FormatAddress(uintptr_t addr) const {
+    if (m_modulesDirty) {
+        m_cachedModules = EnumerateModules();
+        m_modulesDirty = false;
+    }
+    for (auto& m : m_cachedModules) {
+        if (addr >= m.base && addr < m.base + m.size) {
+            char buf[256];
+            snprintf(buf, sizeof(buf), "%s+%llX", m.name.c_str(),
+                     (unsigned long long)(addr - m.base));
+            return buf;
+        }
+    }
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%016llX", (unsigned long long)addr);
+    return buf;
+}
+
+uintptr_t ProcessManager::ParseAddressString(const std::string& str) const {
+    size_t plus = str.find('+');
+    if (plus != std::string::npos) {
+        std::string modName = str.substr(0, plus);
+        std::string offsetStr = str.substr(plus + 1);
+        // Trim trailing whitespace from module name
+        while (!modName.empty() && isspace((unsigned char)modName.back()))
+            modName.pop_back();
+        // Trim leading whitespace from offset
+        size_t start = offsetStr.find_first_not_of(" \t");
+        if (start != std::string::npos) offsetStr = offsetStr.substr(start);
+        uintptr_t base = GetModuleBase(modName.c_str());
+        uintptr_t offset = (uintptr_t)strtoull(offsetStr.c_str(), nullptr, 0);
+        return base + offset;
+    }
+    // Plain hex address (accept optional 0x prefix)
+    return (uintptr_t)strtoull(str.c_str(), nullptr, 16);
 }
