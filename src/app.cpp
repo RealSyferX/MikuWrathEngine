@@ -503,10 +503,8 @@ void App::RenderResults() {
         int sbW = 12;
         int sbX = rc.right - sbW;
         int sbH = rc.bottom - yStart;
-        UI::FillRect(m_ui.g, {sbX, yStart, rc.right, rc.bottom}, Theme::BG_TITLE());
         int thumbH = std::max(20, sbH * visibleRows / (int)displayCount);
-        int thumbY = yStart + (sbH - thumbH) * m_resultsScroll / maxScroll;
-        UI::FillRect(m_ui.g, {sbX + 1, thumbY, rc.right - 1, thumbY + thumbH}, Theme::BG_HOVER());
+        UI::Scrollbar(m_ui, 9000, {sbX, yStart, rc.right, rc.bottom}, thumbH, (int)displayCount, visibleRows, &m_resultsScroll);
     }
 }
 
@@ -727,9 +725,7 @@ void App::RenderProcessPicker() {
         int sbW = 12, sbX = w - sbW;
         int sbH = h - yStart - 20 - 30;
         int thumbH = std::max(20, sbH * visibleRows / (int)filtered.size());
-        int thumbY = yStart + 20 + (sbH - thumbH) * m_processScroll / maxScroll;
-        UI::FillRect(m_ui.g, {sbX, yStart + 20, w, h - 30}, Theme::BG_TITLE());
-        UI::FillRect(m_ui.g, {sbX+1, thumbY, w-1, thumbY+thumbH}, Theme::BG_HOVER());
+        UI::Scrollbar(m_ui, 9001, {sbX, yStart + 20, w, h - 30}, thumbH, (int)filtered.size(), visibleRows, &m_processScroll);
     }
 
     UI::DrawText(m_ui.g, 8, h - 22, "Double-click a process to attach", Theme::CLR_DIM());
@@ -815,6 +811,14 @@ void App::RenderRegionList() {
         }
     }
 
+    // Scrollbar
+    if (regions.size() > (size_t)visibleRows) {
+        int sbW = 12, sbX = w - sbW;
+        int sbH = (h - 20) - (yStart + 20);
+        int thumbH = std::max(20, sbH * visibleRows / (int)regions.size());
+        UI::Scrollbar(m_ui, 9002, {sbX, yStart + 20, w, h - 20}, thumbH, (int)regions.size(), visibleRows, &m_regionScroll);
+    }
+
     char info[64]; snprintf(info, sizeof(info), "Total: %zu regions", regions.size());
     UI::DrawText(m_ui.g, 8, h - 18, info, Theme::CLR_DIM());
 }
@@ -896,6 +900,14 @@ void App::RenderModuleList() {
                 CopyToClipboard(m_hwnd, ab);
             }
         }
+    }
+
+    // Scrollbar
+    if (mods.size() > (size_t)visibleRows) {
+        int sbW = 12, sbX = w - sbW;
+        int sbH = (h - 20) - (yStart + 20);
+        int thumbH = std::max(20, sbH * visibleRows / (int)mods.size());
+        UI::Scrollbar(m_ui, 9003, {sbX, yStart + 20, w, h - 20}, thumbH, (int)mods.size(), visibleRows, &m_moduleScroll);
     }
 
     char info[64]; snprintf(info, sizeof(info), "Total: %zu modules", mods.size());
@@ -1010,10 +1022,14 @@ void App::OnMouseUp(int x, int y) {
     m_ui.mouse = {x, y};
     m_ui.mouseDown = false;
     m_ui.mouseReleased = true;
+    m_ui.scrollDragId = -1;
 }
 
 void App::OnMouseMove(int x, int y) {
     m_ui.mouse = {x, y};
+    if (m_ui.scrollDragId != -1) {
+        InvalidateRect(m_hwnd, nullptr, FALSE);
+    }
 }
 
 void App::OnMouseWheel(int delta) {

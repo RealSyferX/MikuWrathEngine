@@ -83,6 +83,10 @@ struct UIContext {
     // Combo dropdown state
     int comboOpenId = -1;
 
+    // Scrollbar drag state
+    int scrollDragId = -1;
+    int scrollDragOffset = 0;
+
     bool PtInRect(const RECT& rc) const {
         return mouse.x >= rc.left && mouse.x < rc.right &&
                mouse.y >= rc.top && mouse.y < rc.bottom;
@@ -115,6 +119,7 @@ bool TextInput(UIContext& ctx, int id, const RECT& rc, char* buf, int bufSize);
 bool ComboBox(UIContext& ctx, int id, const RECT& rc, const char** items, int count, int* selected);
 void ProgressBar(UIContext& ctx, const RECT& rc, float progress);
 void Label(UIContext& ctx, int x, int y, const char* text, const Gdiplus::Color& color);
+bool Scrollbar(UIContext& ctx, int id, const RECT& rc, int thumbH, int total, int visible, int* scrollPos);
 
 // Fonts
 void InitFonts();

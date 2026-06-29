@@ -371,3 +371,68 @@ void UI::ProgressBar(UIContext& ctx, const RECT& rc, float progress) {
 void UI::Label(UIContext& ctx, int x, int y, const char* text, const Gdiplus::Color& color) {
     DrawText(ctx.g, x, y, text, color);
 }
+
+// ============================================================
+// Scrollbar
+// ============================================================
+bool UI::Scrollbar(UIContext& ctx, int id, const RECT& rc, int thumbH, int total, int visible, int* scrollPos) {
+    if (total <= visible) return false;
+
+    int maxScroll = total - visible;
+    int trackH = rc.bottom - rc.top - thumbH;
+    if (trackH <= 0) return false;
+
+    bool changed = false;
+
+    // Compute thumb Y
+    int thumbY = rc.top + trackH * (*scrollPos) / maxScroll;
+
+    // Check if mouse is on thumb
+    RECT thumbRc = { rc.left, thumbY, rc.right, thumbY + thumbH };
+    bool onThumb = ctx.PtInRect(thumbRc);
+    bool onTrack = ctx.PtInRect(rc);
+
+    // Start drag
+    if (onThumb && ctx.mousePressed) {
+        ctx.scrollDragId = id;
+        ctx.scrollDragOffset = ctx.mouse.y - thumbY;
+    }
+
+    // End drag
+    if (!ctx.mouseDown && ctx.scrollDragId == id) {
+        ctx.scrollDragId = -1;
+    }
+
+    // During drag
+    if (ctx.scrollDragId == id) {
+        int newThumbY = ctx.mouse.y - ctx.scrollDragOffset;
+        newThumbY = std::max<int>(rc.top, std::min<int>(newThumbY, rc.top + trackH));
+        int newScroll = (newThumbY - rc.top) * maxScroll / trackH;
+        if (newScroll != *scrollPos) {
+            *scrollPos = newScroll;
+            changed = true;
+        }
+    }
+
+    // Click on track (page up/down)
+    if (onTrack && !onThumb && ctx.mousePressed) {
+        if (ctx.mouse.y < thumbY) {
+            *scrollPos = std::max(0, *scrollPos - visible);
+        } else {
+            *scrollPos = std::min(maxScroll, *scrollPos + visible);
+        }
+        changed = true;
+    }
+
+    // Recompute thumb position after scroll changes so draw reflects current state
+    thumbY = rc.top + trackH * (*scrollPos) / maxScroll;
+    thumbRc = { rc.left, thumbY, rc.right, thumbY + thumbH };
+
+    // Draw
+    Gdiplus::Color trackColor = Theme::BG_TITLE();
+    Gdiplus::Color thumbColor = (onThumb || ctx.scrollDragId == id) ? Theme::ACCENT_LIGHT() : Theme::BG_HOVER();
+    FillRect(ctx.g, rc, trackColor);
+    FillRect(ctx.g, thumbRc, thumbColor);
+
+    return changed;
+}
