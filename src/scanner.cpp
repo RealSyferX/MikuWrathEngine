@@ -118,7 +118,7 @@ bool Scanner::NextScanAsync(int nextScanType,
                             const std::string& valueStr, const std::string& valueStr2,
                             bool hex) {
     if (m_scanning) return false;
-    if (m_firstScan) return false;
+    if (m_firstScan.load(std::memory_order_acquire)) return false;
     if (m_thread.joinable()) m_thread.join();
 
     m_scanning = true;
@@ -138,23 +138,17 @@ void Scanner::Reset() {
     m_results.clear();
     m_snapshot.clear();
     m_prevValues.clear();
-    m_hasSnapshot = false;
-    m_firstScan = true;
+    m_hasSnapshot.store(false, std::memory_order_release);
+    m_firstScan.store(true, std::memory_order_release);
+    m_cachedResultCount.store(0, std::memory_order_relaxed);
     m_progress = 0.0f;
 }
 
 size_t Scanner::GetResultCount() const {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    if (m_hasSnapshot) {
-        // Snapshot mode: count is implicit
-        size_t count = 0;
-        size_t vsz = m_valueSize;
-        for (auto& snap : m_snapshot) {
-            if (snap.data.size() >= vsz)
-                count += snap.data.size() - vsz + 1;
-        }
-        return count;
+    if (m_hasSnapshot.load(std::memory_order_acquire)) {
+        return m_cachedResultCount.load(std::memory_order_relaxed);
     }
+    std::lock_guard<std::mutex> lock(m_mutex);
     return m_results.size();
 }
 
@@ -203,14 +197,22 @@ void Scanner::NewScanWorker(ValueType type, int scanType,
             m_progress = (float)(ri + 1) / totalRegions * 0.5f;
         }
 
+        // Compute cached result count for snapshot mode
+        size_t snapCount = 0;
+        for (auto& snap : localSnap) {
+            if (snap.data.size() >= vsz)
+                snapCount += snap.data.size() - vsz + 1;
+        }
+        m_cachedResultCount.store(snapCount, std::memory_order_relaxed);
+
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             m_snapshot = std::move(localSnap);
             m_results.clear();
-            m_hasSnapshot = true;
+            m_hasSnapshot.store(true, std::memory_order_release);
             m_prevValues.clear();
         }
-        m_firstScan = false;
+        m_firstScan.store(false, std::memory_order_release);
     } else {
         // Exact / bigger / smaller / between
         std::vector<uintptr_t> localResults;
@@ -296,6 +298,7 @@ void Scanner::NewScanWorker(ValueType type, int scanType,
             }
 
             m_progress = (float)(ri + 1) / totalRegions;
+            m_cachedResultCount.store(localResults.size(), std::memory_order_relaxed);
         }
 
     scan_done:
@@ -303,11 +306,11 @@ void Scanner::NewScanWorker(ValueType type, int scanType,
             std::lock_guard<std::mutex> lock(m_mutex);
             m_results = std::move(localResults);
             m_snapshot.clear();
-            m_hasSnapshot = false;
+            m_hasSnapshot.store(false, std::memory_order_release);
         }
 
         StorePrevValues();
-        m_firstScan = false;
+        m_firstScan.store(false, std::memory_order_release);
     }
 
     m_progress = 1.0f;
@@ -323,7 +326,7 @@ bool Scanner::NextScanWorker(int nextScanType,
     size_t vsz = m_valueSize;
 
     // Handle snapshot mode (from Unknown Initial Value)
-    if (m_hasSnapshot) {
+    if (m_hasSnapshot.load(std::memory_order_acquire)) {
         std::vector<uintptr_t> localResults;
 
         bool needTarget = (nextScanType <= 3); // exact/bigger/smaller/between need a target
@@ -380,6 +383,7 @@ bool Scanner::NextScanWorker(int nextScanType,
             }
 
             m_progress = (float)(si + 1) / totalSnaps;
+            m_cachedResultCount.store(localResults.size(), std::memory_order_relaxed);
         }
 
     snap_done:
@@ -387,9 +391,10 @@ bool Scanner::NextScanWorker(int nextScanType,
             std::lock_guard<std::mutex> lock(m_mutex);
             m_results = std::move(localResults);
             m_snapshot.clear();
-            m_hasSnapshot = false;
+            m_hasSnapshot.store(false, std::memory_order_release);
         }
         StorePrevValues();
+        m_firstScan.store(false, std::memory_order_release);
         m_progress = 1.0f;
         m_scanning = false;
         return true;
@@ -504,6 +509,7 @@ bool Scanner::NextScanWorker(int nextScanType,
         }
 
         m_progress = (float)(base + count) / total;
+        m_cachedResultCount.store(filtered.size(), std::memory_order_relaxed);
     }
 
 filter_done:
@@ -512,6 +518,7 @@ filter_done:
         m_results = std::move(filtered);
     }
     StorePrevValues();
+    m_firstScan.store(false, std::memory_order_release);
 
     m_progress = 1.0f;
     m_scanning = false;

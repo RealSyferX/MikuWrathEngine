@@ -28,7 +28,7 @@ public:
     bool IsScanning() const { return m_scanning; }
     float GetProgress() const { return m_progress; }
     size_t GetResultCount() const;
-    bool IsFirstScan() const { return m_firstScan; }
+    bool IsFirstScan() const { return m_firstScan.load(std::memory_order_acquire); }
     ValueType GetValueType() const { return m_valueType; }
 
     std::vector<uintptr_t> GetResultsCopy() const;
@@ -51,7 +51,7 @@ private:
     std::thread m_thread;
 
     std::vector<uintptr_t> m_results;
-    bool m_firstScan = true;
+    std::atomic<bool> m_firstScan{true};
     ValueType m_valueType = ValueType::Dword;
 
     // For changed/unchanged: snapshot of previous values
@@ -60,7 +60,8 @@ private:
         std::vector<uint8_t> data;
     };
     std::vector<RegionSnapshot> m_snapshot;
-    bool m_hasSnapshot = false;
+    std::atomic<bool> m_hasSnapshot{false};
+    std::atomic<size_t> m_cachedResultCount{0};
 
     // Previous values for explicit results (changed/unchanged/increased/decreased)
     std::vector<uint8_t> m_prevValues;
