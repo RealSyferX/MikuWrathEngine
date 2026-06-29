@@ -176,7 +176,17 @@ void Scanner::NewScanWorker(ValueType type, int scanType,
         }
     }
 
-    size_t vsz = ValueTypeSize(type);
+    // Compute the per-element byte width. For numeric types this is the
+    // fixed type size; for AOB/String it is the pattern/string length so
+    // that snapshot mode (which relies on m_valueSize) works correctly.
+    size_t vsz;
+    if (type == ValueType::AOB) {
+        vsz = m_aobPattern.bytes.size();
+    } else if (type == ValueType::String) {
+        vsz = m_searchString.size();
+    } else {
+        vsz = ValueTypeSize(type);
+    }
     m_valueSize = vsz;
 
     auto regions = m_pm->EnumerateRegions(writableOnly);
@@ -327,6 +337,10 @@ bool Scanner::NextScanWorker(int nextScanType,
 
     // Handle snapshot mode (from Unknown Initial Value)
     if (m_hasSnapshot.load(std::memory_order_acquire)) {
+        // Guard: a zero value size (e.g. empty AOB/String) makes the
+        // scanLen math below read out of bounds. Bail early instead.
+        if (m_valueSize == 0) { m_scanning = false; return false; }
+
         std::vector<uintptr_t> localResults;
 
         bool needTarget = (nextScanType <= 3); // exact/bigger/smaller/between need a target
@@ -361,7 +375,24 @@ bool Scanner::NextScanWorker(int nextScanType,
                 double prevVal = IsNumericType(m_valueType) ? ToDouble(prev) : 0;
 
                 switch (nextScanType) {
-                case 0: match = (memcmp(cur, targetBuf, vsz) == 0); break; // exact
+                case 0: { // exact
+                    // AOB/String have no targetBuf (IsNumericType is false,
+                    // so ParseAndWrite was skipped). Match against the
+                    // parsed pattern / search string instead.
+                    if (m_valueType == ValueType::AOB) {
+                        match = true;
+                        for (size_t j = 0; j < m_aobPattern.bytes.size(); j++) {
+                            if (m_aobPattern.mask[j] && cur[j] != m_aobPattern.bytes[j]) {
+                                match = false; break;
+                            }
+                        }
+                    } else if (m_valueType == ValueType::String) {
+                        match = (memcmp(cur, m_searchString.data(), m_searchString.size()) == 0);
+                    } else {
+                        match = (memcmp(cur, targetBuf, vsz) == 0);
+                    }
+                    break;
+                }
                 case 1: match = (curVal > targetVal); break;               // bigger
                 case 2: match = (curVal < targetVal); break;               // smaller
                 case 3: {                                            // between
