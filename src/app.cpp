@@ -66,10 +66,13 @@ void App::UpdateState() {
         m_updateTimer = 0.0f;
     }
 
-    // Refresh results if not scanning
-    if (!m_scanner.IsScanning() && !m_results.empty()) {
-        // Results are already stored
+    // Detect scan completion and auto-populate results
+    bool isScanning = m_scanner.IsScanning();
+    if (m_wasScanning && !isScanning) {
+        m_results = m_scanner.GetResultsCopy();
+        m_cachedResultValues.clear();
     }
+    m_wasScanning = isScanning;
 }
 
 // ============================================================
@@ -362,7 +365,19 @@ void App::RenderScanPanel() {
 
     // Scan buttons
     int bx = 488;
-    if (!canScan) {
+    if (m_scanner.IsScanning()) {
+        // Stop button (red)
+        RECT btnRc = {bx, y, bx+100, y+22};
+        UI::FillRect(m_ui.g, btnRc, Gdiplus::Color(180, 30, 30));
+        UI::DrawRect(m_ui.g, btnRc, Gdiplus::Color(220, 50, 50));
+        UI::DrawText(m_ui.g, bx+30, y+3, "Stop", Theme::CLR_TEXT());
+        if (m_ui.PtInRect(btnRc) && m_ui.mousePressed) {
+            m_scanner.RequestCancel();
+        }
+        // Progress bar
+        RECT pbRc = {bx+110, y, bx+260, y+22};
+        UI::ProgressBar(m_ui, pbRc, m_scanner.GetProgress());
+    } else if (!canScan) {
         // Draw disabled button
         RECT btnRc = {bx, y, bx+100, y+22};
         UI::FillRect(m_ui.g, btnRc, Theme::BG_CONTROL());
@@ -375,12 +390,6 @@ void App::RenderScanPanel() {
             if (UI::Button(m_ui, 26, {bx, y, bx+100, y+22}, "Next Scan")) DoNextScan();
             if (UI::Button(m_ui, 27, {bx+108, y, bx+168, y+22}, "Reset")) DoResetScan();
         }
-    }
-
-    // Progress bar
-    if (m_scanner.IsScanning()) {
-        RECT pbRc = {bx+180, y, bx+330, y+22};
-        UI::ProgressBar(m_ui, pbRc, m_scanner.GetProgress());
     }
 
     // Result count

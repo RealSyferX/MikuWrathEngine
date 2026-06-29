@@ -60,6 +60,7 @@ private:
     std::vector<uintptr_t> m_results;
     int m_resultsScroll = 0;
     int m_selectedResult = -1;
+    bool m_wasScanning = false;
 
     bool m_showProcessPicker = false;
     std::vector<ProcessInfo> m_processList;

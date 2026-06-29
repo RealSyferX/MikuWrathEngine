@@ -5,7 +5,7 @@
 #include <algorithm>
 
 Scanner::~Scanner() {
-    m_scanning = false;
+    m_scanning.store(false, std::memory_order_relaxed);
     if (m_thread.joinable()) m_thread.join();
 }
 
@@ -273,6 +273,7 @@ void Scanner::NewScanWorker(ValueType type, int scanType,
                 scanLen = (r.size >= vsz) ? r.size - vsz + 1 : 0;
 
             for (size_t off = 0; off < scanLen; off++) {
+                if (off % 4096 == 0 && !m_scanning.load(std::memory_order_relaxed)) goto scan_done;
                 bool match = false;
                 const uint8_t* ptr = data.data() + off;
 
@@ -309,6 +310,7 @@ void Scanner::NewScanWorker(ValueType type, int scanType,
 
             m_progress = (float)(ri + 1) / totalRegions;
             m_cachedResultCount.store(localResults.size(), std::memory_order_relaxed);
+            if (!m_scanning.load(std::memory_order_relaxed)) goto scan_done;
         }
 
     scan_done:
@@ -367,6 +369,7 @@ bool Scanner::NextScanWorker(int nextScanType,
 
             size_t scanLen = (current.size() >= vsz) ? current.size() - vsz + 1 : 0;
             for (size_t off = 0; off < scanLen; off++) {
+                if (off % 4096 == 0 && !m_scanning.load(std::memory_order_relaxed)) goto snap_done;
                 const uint8_t* cur = current.data() + off;
                 const uint8_t* prev = snap.data.data() + off;
                 bool match = false;
@@ -415,6 +418,7 @@ bool Scanner::NextScanWorker(int nextScanType,
 
             m_progress = (float)(si + 1) / totalSnaps;
             m_cachedResultCount.store(localResults.size(), std::memory_order_relaxed);
+            if (!m_scanning.load(std::memory_order_relaxed)) goto snap_done;
         }
 
     snap_done:
@@ -541,6 +545,7 @@ bool Scanner::NextScanWorker(int nextScanType,
 
         m_progress = (float)(base + count) / total;
         m_cachedResultCount.store(filtered.size(), std::memory_order_relaxed);
+        if (!m_scanning.load(std::memory_order_relaxed)) goto filter_done;
     }
 
 filter_done:
@@ -569,6 +574,7 @@ void Scanner::StorePrevValues() {
 
     m_prevValues.resize(m_results.size() * vsz);
     for (size_t i = 0; i < m_results.size(); i++) {
+        if (i % 4096 == 0 && !m_scanning.load(std::memory_order_relaxed)) break;
         if (!m_pm->Read(m_results[i], m_prevValues.data() + i * vsz, vsz)) {
             memset(m_prevValues.data() + i * vsz, 0, vsz);
         }

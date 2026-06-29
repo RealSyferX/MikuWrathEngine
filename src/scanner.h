@@ -26,6 +26,7 @@ public:
     void Reset();
 
     bool IsScanning() const { return m_scanning; }
+    void RequestCancel() { m_scanning.store(false, std::memory_order_relaxed); }
     float GetProgress() const { return m_progress; }
     size_t GetResultCount() const;
     bool IsFirstScan() const { return m_firstScan.load(std::memory_order_acquire); }
