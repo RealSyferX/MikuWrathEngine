@@ -239,8 +239,7 @@ void MemoryViewer::ShowContextMenu(int x, int y, uintptr_t addr, bool isDisasm, 
     case 7: m_disasmAddr = addr; RefreshDisasm(); break;
     case 8: {
         char buf[32]; snprintf(buf, sizeof(buf), "0x%llX", (unsigned long long)addr);
-        if (OpenClipboard(m_hwnd)) { EmptyClipboard(); HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, strlen(buf)+1);
-        memcpy(GlobalLock(h), buf, strlen(buf)+1); GlobalUnlock(h); SetClipboardData(CF_TEXT, h); CloseClipboard(); }
+        CopyToClipboard(m_hwnd, buf);
     } break;
     }
     InvalidateRect(m_hwnd, nullptr, FALSE);

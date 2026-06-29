@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
 #include <windows.h>
@@ -73,3 +74,35 @@ struct DisasmInstruction {
     char mnemonic[32] = {};
     char opStr[160] = {};
 };
+
+// ============================================================
+// Clipboard helpers — shared across app, memory viewer, and UI
+// ============================================================
+inline void CopyToClipboard(HWND hwnd, const char* text) {
+    if (!text || !OpenClipboard(hwnd)) return;
+    EmptyClipboard();
+    size_t len = strlen(text) + 1;
+    HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, len);
+    if (h) {
+        if (void* p = GlobalLock(h)) {
+            memcpy(p, text, len);
+            GlobalUnlock(h);
+            SetClipboardData(CF_TEXT, h);
+        }
+    }
+    CloseClipboard();
+}
+
+inline std::string PasteFromClipboard(HWND hwnd) {
+    if (!OpenClipboard(hwnd)) return "";
+    HANDLE h = GetClipboardData(CF_TEXT);
+    std::string result;
+    if (h) {
+        if (const char* p = (const char*)GlobalLock(h)) {
+            result = p;
+            GlobalUnlock(h);
+        }
+    }
+    CloseClipboard();
+    return result;
+}

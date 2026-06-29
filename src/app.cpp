@@ -893,8 +893,7 @@ void App::RenderModuleList() {
             if (res == 1) { GoToAddress(m.base); m_showModuleList = false; }
             if (res == 2) {
                 char ab[32]; snprintf(ab, sizeof(ab), "0x%llX", (unsigned long long)m.base);
-                if (OpenClipboard(m_hwnd)) { EmptyClipboard(); HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, strlen(ab)+1);
-                memcpy(GlobalLock(hg), ab, strlen(ab)+1); GlobalUnlock(hg); SetClipboardData(CF_TEXT, hg); CloseClipboard(); }
+                CopyToClipboard(m_hwnd, ab);
             }
         }
     }
@@ -920,8 +919,7 @@ void App::ShowResultContextMenu(int x, int y, uintptr_t addr) {
     case 2: GoToAddress(addr); break;
     case 3: {
         char buf[32]; snprintf(buf, sizeof(buf), "0x%llX", (unsigned long long)addr);
-        if (OpenClipboard(m_hwnd)) { EmptyClipboard(); HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, strlen(buf)+1);
-        memcpy(GlobalLock(h), buf, strlen(buf)+1); GlobalUnlock(h); SetClipboardData(CF_TEXT, h); CloseClipboard(); }
+        CopyToClipboard(m_hwnd, buf);
     } break;
     }
 }
@@ -942,12 +940,10 @@ void App::ShowTableContextMenu(int x, int y, size_t entryIdx) {
     case 1: GoToAddress(entries[entryIdx].address); break;
     case 2: {
         char buf[32]; snprintf(buf, sizeof(buf), "0x%llX", (unsigned long long)entries[entryIdx].address);
-        if (OpenClipboard(m_hwnd)) { EmptyClipboard(); HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, strlen(buf)+1);
-        memcpy(GlobalLock(h), buf, strlen(buf)+1); GlobalUnlock(h); SetClipboardData(CF_TEXT, h); CloseClipboard(); }
+        CopyToClipboard(m_hwnd, buf);
     } break;
     case 3: {
-        if (OpenClipboard(m_hwnd)) { EmptyClipboard(); HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, strlen(entries[entryIdx].editValue)+1);
-        memcpy(GlobalLock(h), entries[entryIdx].editValue, strlen(entries[entryIdx].editValue)+1); GlobalUnlock(h); SetClipboardData(CF_TEXT, h); CloseClipboard(); }
+        CopyToClipboard(m_hwnd, entries[entryIdx].editValue);
     } break;
     case 4: m_table.Remove(entryIdx); break;
     }

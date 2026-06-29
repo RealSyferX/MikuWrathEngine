@@ -1,4 +1,5 @@
 #include "ui.h"
+#include "types.h"
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
@@ -276,37 +277,20 @@ bool UI::TextInput(UIContext& ctx, int id, const RECT& rc, char* buf, int bufSiz
                 break;
             case 'C':
                 if (ctx.keyCtrl) {
-                    // Copy selection (simplified: copy all)
-                    if (OpenClipboard(ctx.hwnd)) {
-                        EmptyClipboard();
-                        HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, len + 1);
-                        if (h) {
-                            memcpy(GlobalLock(h), buf, len + 1);
-                            GlobalUnlock(h);
-                            SetClipboardData(CF_TEXT, h);
-                        }
-                        CloseClipboard();
-                    }
+                    CopyToClipboard(ctx.hwnd, buf);
                 }
                 break;
             case 'V':
                 if (ctx.keyCtrl) {
-                    if (OpenClipboard(ctx.hwnd)) {
-                        HANDLE h = GetClipboardData(CF_TEXT);
-                        if (h) {
-                            const char* clip = (const char*)GlobalLock(h);
-                            if (clip) {
-                                int clipLen = (int)strlen(clip);
-                                int remain = bufSize - 1 - len;
-                                int toPaste = std::min(clipLen, remain);
-                                memmove(buf + ctx.caretPos + toPaste, buf + ctx.caretPos, len - ctx.caretPos + 1);
-                                memcpy(buf + ctx.caretPos, clip, toPaste);
-                                ctx.caretPos += toPaste;
-                                changed = true;
-                                GlobalUnlock(h);
-                            }
-                        }
-                        CloseClipboard();
+                    std::string clip = PasteFromClipboard(ctx.hwnd);
+                    if (!clip.empty()) {
+                        int clipLen = (int)clip.size();
+                        int remain = bufSize - 1 - len;
+                        int toPaste = std::min(clipLen, remain);
+                        memmove(buf + ctx.caretPos + toPaste, buf + ctx.caretPos, len - ctx.caretPos + 1);
+                        memcpy(buf + ctx.caretPos, clip.c_str(), toPaste);
+                        ctx.caretPos += toPaste;
+                        changed = true;
                     }
                 }
                 break;
