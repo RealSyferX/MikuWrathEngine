@@ -55,7 +55,10 @@ void App::ComputeLayout(int w, int h) {
 // ============================================================
 void App::UpdateState() {
     DWORD now = GetTickCount();
-    m_dt = (now - m_lastTick) / 1000.0f;
+    // Clamp delta time to prevent bursts after pause/suspend (e.g. debugger,
+    // sleep, minimized window) from producing huge steps that destabilize
+    // timers and frozen-value updates.
+    m_dt = std::min((now - m_lastTick) / 1000.0f, 0.1f);
     m_lastTick = now;
 
     m_table.UpdateFrozen(m_process, m_dt);
@@ -392,13 +395,20 @@ void App::RenderScanPanel() {
         }
     }
 
-    // Result count
-    size_t count = m_scanner.IsScanning() ? 0 : (m_results.empty() ? m_scanner.GetResultCount() : m_results.size());
+    // Result count — GetResultCount() returns the live atomic count while
+    // scanning and m_results.size() otherwise, so it is always accurate.
+    size_t count = m_scanner.GetResultCount();
     char countStr[64];
-    if (count > 100000)
+    if (m_scanner.IsScanning()) {
+        if (count > 100000)
+            snprintf(countStr, sizeof(countStr), "Scanning... Found: %zu (first 100000)", count);
+        else
+            snprintf(countStr, sizeof(countStr), "Scanning... Found: %zu", count);
+    } else if (count > 100000) {
         snprintf(countStr, sizeof(countStr), "Found: %zu (first 100000)", count);
-    else
+    } else {
         snprintf(countStr, sizeof(countStr), "Found: %zu", count);
+    }
     UI::DrawText(m_ui.g, bx+340, y+3, countStr, Theme::CLR_YELLOW());
 }
 
@@ -1050,6 +1060,13 @@ void App::OnKeyDown(WPARAM key) {
     m_ui.keyPressed = true;
     m_ui.keyCtrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
     m_ui.keyShift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+
+    // Escape defocuses the active text input
+    if (key == VK_ESCAPE && m_ui.focusId != -1) {
+        m_ui.focusId = -1;
+        return;
+    }
+
     HandleHotkeys();
 }
 
@@ -1064,6 +1081,18 @@ void App::OnTimer() {
 }
 
 void App::HandleHotkeys() {
+    // Don't fire hotkeys when a text input is focused (IDs < 9000 are text
+    // inputs; 9000+ are scrollbars/other non-text controls). This prevents
+    // Ctrl+F/R/S/etc. from hijacking typing.
+    if (m_ui.focusId != -1 && m_ui.focusId < 9000) {
+        // Allow Escape to defocus (handled in OnKeyDown, but keep this
+        // branch explicit so future callers don't bypass it).
+        if (m_ui.keyPressed && m_ui.keyCode == VK_ESCAPE) {
+            m_ui.focusId = -1;
+        }
+        return;
+    }
+
     if (!m_ui.keyCtrl) return;
     switch (m_ui.keyCode) {
     case 'F':
