@@ -19,64 +19,103 @@ static App* g_app = nullptr;
 static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_PAINT: {
+        // Guard against re-entrant paints.  A modal loop (TrackPopupMenu,
+        // GetSaveFileName, etc.) running inside ProcessPendingActions can
+        // dispatch a WM_PAINT while we are still inside OnPaint.  Skip the
+        // nested paint entirely — the outer paint will finish and the
+        // InvalidateRect calls will queue a fresh one.
+        static bool s_inPaint = false;
+        if (s_inPaint || !g_app) {
+            PAINTSTRUCT ps;
+            BeginPaint(hWnd, &ps);
+            EndPaint(hWnd, &ps);
+            return 0;
+        }
+        s_inPaint = true;
+
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hWnd, &ps);
         RECT rc; GetClientRect(hWnd, &rc);
         int w = rc.right - rc.left, h = rc.bottom - rc.top;
 
-        HDC memDC = CreateCompatibleDC(hdc);
-        HBITMAP memBmp = CreateCompatibleBitmap(hdc, w, h);
-        HBITMAP oldBmp = (HBITMAP)SelectObject(memDC, memBmp);
-
-        {
-            Gdiplus::Graphics g(memDC);
-            g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-            g_app->m_ui.g = &g;
-            g_app->m_ui.width = w;
-            g_app->m_ui.height = h;
-            g_app->OnPaint(&g);
+        // Zero-size window (minimised, just-created, etc.) — nothing to draw.
+        // CreateCompatibleBitmap(hdc, 0, 0) returns NULL which would crash
+        // the Graphics constructor or BitBlt below.
+        if (w <= 0 || h <= 0) {
+            EndPaint(hWnd, &ps);
+            s_inPaint = false;
+            return 0;
         }
 
-        BitBlt(hdc, 0, 0, w, h, memDC, 0, 0, SRCCOPY);
-        SelectObject(memDC, oldBmp);
-        DeleteObject(memBmp);
-        DeleteDC(memDC);
+        HDC memDC = CreateCompatibleDC(hdc);
+        HBITMAP memBmp = CreateCompatibleBitmap(hdc, w, h);
+        HBITMAP oldBmp = memBmp ? (HBITMAP)SelectObject(memDC, memBmp) : nullptr;
+
+        if (memDC && memBmp) {
+            {
+                Gdiplus::Graphics g(memDC);
+                g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+                g_app->m_ui.g = &g;
+                g_app->m_ui.width = w;
+                g_app->m_ui.height = h;
+                g_app->OnPaint(&g);
+            }
+            // Graphics object is now destroyed — clear the dangling pointer
+            // so that no handler (WM_TIMER, WM_KEYDOWN, …) can use it
+            // before the next WM_PAINT sets it again.
+            g_app->m_ui.g = nullptr;
+
+            BitBlt(hdc, 0, 0, w, h, memDC, 0, 0, SRCCOPY);
+            SelectObject(memDC, oldBmp);
+            DeleteObject(memBmp);
+        }
+        if (memDC) DeleteDC(memDC);
         EndPaint(hWnd, &ps);
+        s_inPaint = false;
         return 0;
     }
     case WM_LBUTTONDOWN:
+        if (!g_app) break;
         g_app->OnMouseDown(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), false, false);
         InvalidateRect(hWnd, nullptr, FALSE);
         return 0;
     case WM_LBUTTONDBLCLK:
+        if (!g_app) break;
         g_app->OnMouseDown(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), false, true);
         InvalidateRect(hWnd, nullptr, FALSE);
         return 0;
     case WM_RBUTTONDOWN:
+        if (!g_app) break;
         g_app->OnMouseDown(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), true, false);
         InvalidateRect(hWnd, nullptr, FALSE);
         return 0;
     case WM_LBUTTONUP:
+        if (!g_app) break;
         g_app->OnMouseUp(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
         InvalidateRect(hWnd, nullptr, FALSE);
         return 0;
     case WM_MOUSEMOVE:
+        if (!g_app) break;
         g_app->OnMouseMove(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
         InvalidateRect(hWnd, nullptr, FALSE);
         return 0;
     case WM_MOUSEWHEEL:
+        if (!g_app) break;
         g_app->OnMouseWheel(GET_WHEEL_DELTA_WPARAM(wParam));
         InvalidateRect(hWnd, nullptr, FALSE);
         return 0;
     case WM_KEYDOWN:
+        if (!g_app) break;
         g_app->OnKeyDown(wParam);
         InvalidateRect(hWnd, nullptr, FALSE);
         return 0;
     case WM_CHAR:
+        if (!g_app) break;
         g_app->OnChar((wchar_t)wParam);
         InvalidateRect(hWnd, nullptr, FALSE);
         return 0;
     case WM_TIMER:
+        if (!g_app) break;
         g_app->OnTimer();
         return 0;
     case WM_NCHITTEST: {

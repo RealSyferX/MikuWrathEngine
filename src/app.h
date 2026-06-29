@@ -16,7 +16,7 @@ public:
     App();
     ~App();
 
-    void SetHwnd(HWND h) { m_hwnd = h; }
+    void SetHwnd(HWND h) { m_hwnd = h; m_ui.hwnd = h; }
     HWND GetHwnd() { return m_hwnd; }
     bool TakePendingDrag() { bool v = m_pendingDrag; m_pendingDrag = false; return v; }
     UIContext m_ui;

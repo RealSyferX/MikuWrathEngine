@@ -38,17 +38,20 @@ void UI::CleanupFonts() {
 // Primitive drawing
 // ============================================================
 void UI::FillRect(Gdiplus::Graphics* g, const RECT& rc, const Gdiplus::Color& color) {
+    if (!g) return;
     Gdiplus::SolidBrush brush(color);
     g->FillRectangle(&brush, (int)rc.left, (int)rc.top, (int)(rc.right - rc.left), (int)(rc.bottom - rc.top));
 }
 
 void UI::DrawRect(Gdiplus::Graphics* g, const RECT& rc, const Gdiplus::Color& color, float width) {
+    if (!g) return;
     Gdiplus::Pen pen(color, width);
     g->DrawRectangle(&pen, (int)rc.left, (int)rc.top, (int)(rc.right - rc.left - 1), (int)(rc.bottom - rc.top - 1));
 }
 
 void UI::DrawRoundedRect(Gdiplus::Graphics* g, int x, int y, int w, int h, int radius,
                          const Gdiplus::Pen& pen, const Gdiplus::Brush* fill) {
+    if (!g) return;
     Gdiplus::GraphicsPath path;
     int d = radius * 2;
     path.AddArc(x, y, d, d, 180, 90);
@@ -66,6 +69,7 @@ static void WidenRect(RECT& rc, int amount) {
 }
 
 void UI::DrawNeonBorder(Gdiplus::Graphics* g, int x, int y, int w, int h, const Gdiplus::Color& color) {
+    if (!g) return;
     // Multi-pass glow: thick transparent → thin opaque
     for (int i = 4; i >= 1; i--) {
         int alpha = 25 + (5 - i) * 25;
@@ -78,13 +82,14 @@ void UI::DrawNeonBorder(Gdiplus::Graphics* g, int x, int y, int w, int h, const 
 }
 
 void UI::DrawSeparator(Gdiplus::Graphics* g, int y, int x1, int x2) {
+    if (!g) return;
     Gdiplus::Pen pen(Theme::BORDER(), 1.0f);
     g->DrawLine(&pen, x1, y, x2, y);
 }
 
 void UI::DrawText(Gdiplus::Graphics* g, int x, int y, const char* text,
                   const Gdiplus::Color& color, const Gdiplus::Font* font) {
-    if (!text || !text[0]) return;
+    if (!g || !text || !text[0]) return;
     if (!font) font = g_font;
     // Convert UTF-8 to wide
     int len = (int)strlen(text);
@@ -99,7 +104,7 @@ void UI::DrawText(Gdiplus::Graphics* g, int x, int y, const char* text,
 
 void UI::DrawTextW(Gdiplus::Graphics* g, int x, int y, const wchar_t* text,
                    const Gdiplus::Color& color, const Gdiplus::Font* font) {
-    if (!text || !text[0]) return;
+    if (!g || !text || !text[0]) return;
     if (!font) font = g_font;
     Gdiplus::SolidBrush brush(color);
     Gdiplus::PointF pos((float)x, (float)y);
@@ -108,10 +113,11 @@ void UI::DrawTextW(Gdiplus::Graphics* g, int x, int y, const wchar_t* text,
 
 void UI::MeasureText(Gdiplus::Graphics* g, const char* text,
                      const Gdiplus::Font* font, int* w, int* h) {
+    if (w) *w = 0;
+    if (h) *h = 0;
+    if (!g) return;
     if (!font) font = g_font;
     if (!text || !text[0]) {
-        if (w) *w = 0;
-        if (h) *h = 0;
         return;
     }
     int len = (int)strlen(text);
@@ -168,6 +174,7 @@ bool UI::Button(UIContext& ctx, int id, const RECT& rc, const char* text) {
 // Checkbox
 // ============================================================
 bool UI::Checkbox(UIContext& ctx, int id, const RECT& rc, const char* label, bool* value) {
+    if (!ctx.g) return false;
     bool hovered = ctx.PtInRect(rc);
     bool changed = false;
 
@@ -202,6 +209,7 @@ bool UI::Checkbox(UIContext& ctx, int id, const RECT& rc, const char* label, boo
 // Text Input
 // ============================================================
 bool UI::TextInput(UIContext& ctx, int id, const RECT& rc, char* buf, int bufSize) {
+    if (!ctx.g) return false;
     bool hovered = ctx.PtInRect(rc);
     bool focused = (ctx.focusId == id);
     bool changed = false;
@@ -305,6 +313,7 @@ bool UI::TextInput(UIContext& ctx, int id, const RECT& rc, char* buf, int bufSiz
 // Combo Box (native popup menu)
 // ============================================================
 bool UI::ComboBox(UIContext& ctx, int id, const RECT& rc, const char** items, int count, int* selected) {
+    if (!ctx.g) return false;
     bool hovered = ctx.PtInRect(rc);
     bool changed = false;
 
@@ -372,6 +381,7 @@ bool UI::Scrollbar(UIContext& ctx, int id, const RECT& rc, int thumbH, int total
     if (total <= visible) return false;
 
     int maxScroll = total - visible;
+    if (maxScroll <= 0) return false;
     int trackH = rc.bottom - rc.top - thumbH;
     if (trackH <= 0) return false;
 

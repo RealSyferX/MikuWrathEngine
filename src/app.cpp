@@ -456,7 +456,7 @@ void App::RenderResults() {
     // Rows
     int rowH = 16;
     int yStart = rc.top + 20;
-    int visibleRows = (rc.bottom - yStart) / rowH;
+    int visibleRows = std::max<int>(0, (rc.bottom - yStart) / rowH);
 
     // Adjust scroll
     int maxScroll = std::max(0, (int)displayCount - visibleRows);
@@ -526,7 +526,7 @@ void App::RenderResults() {
     }
 
     // Scrollbar
-    if (displayCount > (size_t)visibleRows) {
+    if (visibleRows > 0 && displayCount > (size_t)visibleRows) {
         int sbW = 12;
         int sbX = rc.right - sbW;
         int sbH = rc.bottom - yStart;
@@ -573,7 +573,7 @@ void App::RenderAddressTable() {
     int rowH = 20;
     int yStart = hy + 20;
     auto& entries = m_table.Entries();
-    int visibleRows = (rc.bottom - yStart) / rowH;
+    int visibleRows = std::max<int>(0, (rc.bottom - yStart) / rowH);
     int maxScroll = std::max(0, (int)entries.size() - visibleRows);
     m_table.ClampScroll(maxScroll);
 
@@ -743,7 +743,7 @@ void App::RenderProcessPicker() {
     // List
     int rowH = 18;
     int yStart = 60;
-    int visibleRows = (h - yStart - 30) / rowH;
+    int visibleRows = std::max<int>(0, (h - yStart - 30) / rowH);
     int maxScroll = std::max(0, (int)filtered.size() - visibleRows);
     m_processScroll = std::min(m_processScroll, maxScroll);
     m_processScroll = std::max(0, m_processScroll);
@@ -793,7 +793,7 @@ void App::RenderProcessPicker() {
     }
 
     // Scrollbar
-    if (filtered.size() > (size_t)visibleRows) {
+    if (visibleRows > 0 && filtered.size() > (size_t)visibleRows) {
         int sbW = 12, sbX = w - sbW;
         int sbH = h - yStart - 20 - 30;
         int thumbH = std::max(20, sbH * visibleRows / (int)filtered.size());
@@ -831,7 +831,8 @@ void App::RenderRegionList() {
     auto& regions = m_cachedRegions;
     int rowH = 18;
     int yStart = 35;
-    int visibleRows = (h - yStart - 10) / rowH;
+    int visibleRows = std::max<int>(0, (h - yStart - 10) / rowH);
+
     int maxScroll = std::max(0, (int)regions.size() - visibleRows);
     m_regionScroll = std::min(m_regionScroll, maxScroll);
     m_regionScroll = std::max(0, m_regionScroll);
@@ -884,7 +885,7 @@ void App::RenderRegionList() {
     }
 
     // Scrollbar
-    if (regions.size() > (size_t)visibleRows) {
+    if (visibleRows > 0 && regions.size() > (size_t)visibleRows) {
         int sbW = 12, sbX = w - sbW;
         int sbH = (h - 20) - (yStart + 20);
         int thumbH = std::max(20, sbH * visibleRows / (int)regions.size());
@@ -923,7 +924,8 @@ void App::RenderModuleList() {
     auto& mods = m_cachedModules;
     int rowH = 18;
     int yStart = 35;
-    int visibleRows = (h - yStart - 10) / rowH;
+    int visibleRows = std::max<int>(0, (h - yStart - 10) / rowH);
+
     int maxScroll = std::max(0, (int)mods.size() - visibleRows);
     m_moduleScroll = std::min(m_moduleScroll, maxScroll);
     m_moduleScroll = std::max(0, m_moduleScroll);
@@ -967,7 +969,7 @@ void App::RenderModuleList() {
     }
 
     // Scrollbar
-    if (mods.size() > (size_t)visibleRows) {
+    if (visibleRows > 0 && mods.size() > (size_t)visibleRows) {
         int sbW = 12, sbX = w - sbW;
         int sbH = (h - 20) - (yStart + 20);
         int thumbH = std::max(20, sbH * visibleRows / (int)mods.size());

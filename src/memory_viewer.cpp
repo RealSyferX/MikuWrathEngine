@@ -82,27 +82,50 @@ void MemoryViewer::ProcessPendingActions() {
 LRESULT MemoryViewer::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_PAINT: {
+        // Guard against re-entrant paints (modal loops dispatched from
+        // ProcessPendingActions or ShowContextMenu can trigger WM_PAINT).
+        static bool s_inPaint = false;
+        if (s_inPaint) {
+            PAINTSTRUCT ps;
+            BeginPaint(m_hwnd, &ps);
+            EndPaint(m_hwnd, &ps);
+            return 0;
+        }
+        s_inPaint = true;
+
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(m_hwnd, &ps);
         RECT rc; GetClientRect(m_hwnd, &rc);
         int w = rc.right - rc.left, h = rc.bottom - rc.top;
 
+        // Zero-size window — CreateCompatibleBitmap(hdc, 0, 0) returns NULL.
+        if (w <= 0 || h <= 0) {
+            EndPaint(m_hwnd, &ps);
+            s_inPaint = false;
+            return 0;
+        }
+
         // Double buffer
         HDC memDC = CreateCompatibleDC(hdc);
         HBITMAP memBmp = CreateCompatibleBitmap(hdc, w, h);
-        HBITMAP oldBmp = (HBITMAP)SelectObject(memDC, memBmp);
+        HBITMAP oldBmp = memBmp ? (HBITMAP)SelectObject(memDC, memBmp) : nullptr;
 
-        {
-            Gdiplus::Graphics g(memDC);
-            g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-            OnPaint(&g, w, h);
+        if (memDC && memBmp) {
+            {
+                Gdiplus::Graphics g(memDC);
+                g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+                OnPaint(&g, w, h);
+            }
+            // Clear dangling pointer — Graphics is destroyed above.
+            m_ui.g = nullptr;
+
+            BitBlt(hdc, 0, 0, w, h, memDC, 0, 0, SRCCOPY);
+            SelectObject(memDC, oldBmp);
+            DeleteObject(memBmp);
         }
-
-        BitBlt(hdc, 0, 0, w, h, memDC, 0, 0, SRCCOPY);
-        SelectObject(memDC, oldBmp);
-        DeleteObject(memBmp);
-        DeleteDC(memDC);
+        if (memDC) DeleteDC(memDC);
         EndPaint(m_hwnd, &ps);
+        s_inPaint = false;
         return 0;
     }
     case WM_LBUTTONDOWN:
@@ -187,6 +210,7 @@ void MemoryViewer::ScrollHex(int lines) {
 }
 
 void MemoryViewer::ScrollDisasm(int lines) {
+    if (!m_dis || !m_dis->IsInitialized()) return;
     int count = std::min(std::abs(lines), 50);
     if (lines > 0) {
         for (int i = 0; i < count; i++) {
