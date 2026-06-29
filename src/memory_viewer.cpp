@@ -1,6 +1,7 @@
 #include "memory_viewer.h"
 #include <windowsx.h>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <algorithm>
 #include <sstream>
@@ -90,12 +91,21 @@ LRESULT MemoryViewer::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_LBUTTONDOWN:
         OnMouseDown(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), false, false);
         return 0;
+    case WM_LBUTTONUP:
+        m_ui.mouseDown = false;
+        InvalidateRect(m_hwnd, nullptr, FALSE);
+        return 0;
     case WM_LBUTTONDBLCLK:
         OnMouseDown(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), false, true);
         return 0;
     case WM_RBUTTONDOWN:
         OnMouseDown(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), true, false);
         return 0;
+    case WM_MOUSEMOVE: {
+        m_ui.mouse = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        InvalidateRect(m_hwnd, nullptr, FALSE);
+        return 0;
+    }
     case WM_MOUSEWHEEL:
         OnMouseWheel(GET_WHEEL_DELTA_WPARAM(wParam));
         return 0;
@@ -160,25 +170,30 @@ void MemoryViewer::ScrollHex(int lines) {
 }
 
 void MemoryViewer::ScrollDisasm(int lines) {
+    int count = std::min(std::abs(lines), 50);
     if (lines > 0) {
-        if (m_disasmView.size() > 1) {
-            m_disasmAddr = m_disasmView[1].address;
-            m_disasmView.erase(m_disasmView.begin());
-            if (m_disasmView.size() < 8 && !m_disasmView.empty()) {
-                uintptr_t nextAddr = m_disasmView.back().address + m_disasmView.back().size;
-                uint8_t buf[256];
-                if (m_pm->Read(nextAddr, buf, sizeof(buf))) {
-                    auto more = m_dis->Disassemble(nextAddr, buf, sizeof(buf), 24);
-                    m_disasmView.insert(m_disasmView.end(), more.begin(), more.end());
+        for (int i = 0; i < count; i++) {
+            if (m_disasmView.size() > 1) {
+                m_disasmAddr = m_disasmView[1].address;
+                m_disasmView.erase(m_disasmView.begin());
+                if (m_disasmView.size() < 8 && !m_disasmView.empty()) {
+                    uintptr_t nextAddr = m_disasmView.back().address + m_disasmView.back().size;
+                    uint8_t buf[256];
+                    if (m_pm->Read(nextAddr, buf, sizeof(buf))) {
+                        auto more = m_dis->Disassemble(nextAddr, buf, sizeof(buf), 1);
+                        if (!more.empty()) m_disasmView.push_back(more[0]);
+                    }
                 }
             }
         }
     } else if (lines < 0) {
-        uintptr_t prevAddr = m_dis->FindPreviousInstruction(m_disasmAddr, m_pm);
-        if (prevAddr != m_disasmAddr) {
-            m_disasmAddr = prevAddr;
-            RefreshDisasm();
+        for (int i = 0; i < count; i++) {
+            uintptr_t prevAddr = m_dis->FindPreviousInstruction(m_disasmAddr, m_pm);
+            if (prevAddr != m_disasmAddr) {
+                m_disasmAddr = prevAddr;
+            }
         }
+        RefreshDisasm();
     }
 }
 
@@ -251,6 +266,7 @@ void MemoryViewer::ShowContextMenu(int x, int y, uintptr_t addr, bool isDisasm, 
 void MemoryViewer::OnMouseDown(int x, int y, bool right, bool dbl) {
     m_ui.mouse = { x, y };
     m_ui.mousePressed = !right && !dbl;
+    m_ui.mouseDown = !right;
     m_ui.mouseDoubleClicked = dbl;
     m_ui.mouseRightPressed = right;
 
@@ -302,6 +318,28 @@ void MemoryViewer::OnKeyDown(WPARAM key) {
     m_ui.keyCode = (int)key;
     m_ui.keyPressed = true;
     m_ui.keyCtrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+
+    if (m_ui.keyCtrl && key == 'G') {
+        m_addrBarFocus = true;
+        m_ui.focusId = 1000;
+        InvalidateRect(m_hwnd, nullptr, FALSE);
+        return;
+    }
+
+    // Only scroll if not editing text
+    if (m_ui.focusId == 1000) {
+        InvalidateRect(m_hwnd, nullptr, FALSE);
+        return; // address bar is focused
+    }
+
+    switch (key) {
+    case VK_UP:    ScrollDisasm(-1); break;
+    case VK_DOWN:  ScrollDisasm(1); break;
+    case VK_PRIOR: ScrollDisasm(-10); break;
+    case VK_NEXT:  ScrollDisasm(10); break;
+    case VK_HOME:  ScrollDisasm(-50); break;
+    case VK_END:   ScrollDisasm(50); break;
+    }
     InvalidateRect(m_hwnd, nullptr, FALSE);
 }
 
