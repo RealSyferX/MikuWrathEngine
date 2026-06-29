@@ -67,13 +67,17 @@ void MemoryViewer::ProcessPendingActions() {
     if (m_ui.pendingComboId != -1) {
         HMENU menu = CreatePopupMenu();
         for (int i = 0; i < m_ui.pendingComboCount; i++) {
-            AppendMenuA(menu, MF_STRING | (i == *m_ui.pendingComboSelected ? MF_CHECKED : 0), i + 1, m_ui.pendingComboItems[i]);
+            AppendMenuA(menu, MF_STRING | (i == m_ui.pendingComboSelected ? MF_CHECKED : 0),
+                i + 1, m_ui.pendingComboItems[i]);
         }
         POINT pt = { m_ui.pendingComboRc.left, m_ui.pendingComboRc.bottom };
         ClientToScreen(m_hwnd, &pt);
-        int result = (int)TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD, pt.x, pt.y, 0, m_hwnd, nullptr);
+        int result = (int)TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD,
+            pt.x, pt.y, 0, m_hwnd, nullptr);
         DestroyMenu(menu);
-        if (result > 0) *m_ui.pendingComboSelected = result - 1;
+        if (result > 0 && m_ui.pendingComboSelectedPtr) {
+            *m_ui.pendingComboSelectedPtr = result - 1;
+        }
         m_ui.pendingComboId = -1;
         InvalidateRect(m_hwnd, nullptr, FALSE);
     }

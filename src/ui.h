@@ -81,11 +81,14 @@ struct UIContext {
     int width = 0, height = 0;
 
     // Pending combo (deferred from paint to avoid modal loop during WM_PAINT)
+    // Must copy items array since the caller's stack array is gone after paint
+    static const int MAX_COMBO_ITEMS = 32;
     int pendingComboId = -1;
     RECT pendingComboRc = {};
-    const char** pendingComboItems = nullptr;
+    const char* pendingComboItems[MAX_COMBO_ITEMS] = {};
     int pendingComboCount = 0;
-    int* pendingComboSelected = nullptr;
+    int pendingComboSelected = -1;  // value, not pointer
+    int* pendingComboSelectedPtr = nullptr;  // where to write the result
 
     // Scrollbar drag state
     int scrollDragId = -1;

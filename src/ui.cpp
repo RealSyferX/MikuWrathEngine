@@ -335,11 +335,15 @@ bool UI::ComboBox(UIContext& ctx, int id, const RECT& rc, const char** items, in
 
     if (hovered && ctx.mousePressed) {
         // Defer the popup menu — can't call TrackPopupMenu during WM_PAINT
+        // Copy items array since caller's stack frame will be gone
         ctx.pendingComboId = id;
         ctx.pendingComboRc = rc;
-        ctx.pendingComboItems = items;
-        ctx.pendingComboCount = count;
-        ctx.pendingComboSelected = selected;
+        ctx.pendingComboCount = std::min(count, UIContext::MAX_COMBO_ITEMS);
+        for (int i = 0; i < ctx.pendingComboCount; i++) {
+            ctx.pendingComboItems[i] = items[i];  // copies the const char* (string literals are static, safe)
+        }
+        ctx.pendingComboSelected = *selected;  // copy current value
+        ctx.pendingComboSelectedPtr = selected;  // remember where to write back
     }
 
     return changed;
