@@ -149,11 +149,11 @@ void MemoryViewer::RefreshDisasm() {
 }
 
 void MemoryViewer::ScrollHex(int lines) {
-    uintptr_t delta = (uintptr_t)(lines * m_hexCols);
+    int absLines = (lines < 0) ? -lines : lines;
+    uintptr_t delta = (uintptr_t)(absLines * m_hexCols);
     if (lines < 0) {
-        uintptr_t newAddr = m_hexAddr - delta;
-        if (newAddr > m_hexAddr) return;
-        m_hexAddr = newAddr;
+        if (m_hexAddr >= delta) m_hexAddr -= delta;
+        else m_hexAddr = 0;
     } else {
         m_hexAddr += delta;
     }
@@ -286,9 +286,9 @@ void MemoryViewer::OnMouseWheel(int delta) {
     int hexTop = disasmTop + halfH + 2;
 
     if (m_ui.mouse.y < hexTop) {
-        ScrollDisasm(delta > 0 ? -1 : 1);
+        ScrollDisasm(delta > 0 ? -3 : 3);
     } else {
-        ScrollHex(delta > 0 ? -1 : 1);
+        ScrollHex(delta > 0 ? -3 : 3);
     }
     InvalidateRect(m_hwnd, nullptr, FALSE);
 }
