@@ -1,0 +1,28 @@
+#pragma once
+#include "types.h"
+#include <vector>
+#include <string>
+
+class ProcessManager {
+public:
+    std::vector<ProcessInfo> EnumerateProcesses();
+    bool OpenTarget(DWORD pid);
+    void CloseTarget();
+
+    bool IsOpen() const { return m_hProcess != nullptr; }
+    HANDLE GetHandle() const { return m_hProcess; }
+    DWORD GetPid() const { return m_pid; }
+    const std::string& GetName() const { return m_processName; }
+    bool Is64Bit() const { return m_is64Bit; }
+
+    bool Read(uintptr_t addr, void* buf, size_t size) const;
+    bool Write(uintptr_t addr, const void* buf, size_t size) const;
+
+    std::vector<MemoryRegion> EnumerateRegions(bool writableOnly = false) const;
+
+private:
+    HANDLE m_hProcess = nullptr;
+    DWORD m_pid = 0;
+    std::string m_processName;
+    bool m_is64Bit = false;
+};
