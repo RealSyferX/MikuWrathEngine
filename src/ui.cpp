@@ -325,19 +325,12 @@ bool UI::ComboBox(UIContext& ctx, int id, const RECT& rc, const char** items, in
     ctx.g->DrawLine(&pen, ax, ay + 2, ax + 3, ay - 2);
 
     if (hovered && ctx.mousePressed) {
-        HMENU menu = CreatePopupMenu();
-        for (int i = 0; i < count; i++) {
-            AppendMenuA(menu, MF_STRING | (i == *selected ? MF_CHECKED : 0), i + 1, items[i]);
-        }
-        POINT pt = { rc.left, rc.bottom };
-        ClientToScreen(ctx.hwnd, &pt);
-        int result = (int)TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD,
-            pt.x, pt.y, 0, ctx.hwnd, nullptr);
-        DestroyMenu(menu);
-        if (result > 0) {
-            *selected = result - 1;
-            changed = true;
-        }
+        // Defer the popup menu — can't call TrackPopupMenu during WM_PAINT
+        ctx.pendingComboId = id;
+        ctx.pendingComboRc = rc;
+        ctx.pendingComboItems = items;
+        ctx.pendingComboCount = count;
+        ctx.pendingComboSelected = selected;
     }
 
     return changed;

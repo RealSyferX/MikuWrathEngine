@@ -80,8 +80,12 @@ struct UIContext {
     HWND hwnd = nullptr;
     int width = 0, height = 0;
 
-    // Combo dropdown state
-    int comboOpenId = -1;
+    // Pending combo (deferred from paint to avoid modal loop during WM_PAINT)
+    int pendingComboId = -1;
+    RECT pendingComboRc = {};
+    const char** pendingComboItems = nullptr;
+    int pendingComboCount = 0;
+    int* pendingComboSelected = nullptr;
 
     // Scrollbar drag state
     int scrollDragId = -1;

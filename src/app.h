@@ -33,6 +33,7 @@ public:
 
     void ToggleMemoryViewer();
     void GoToAddress(uintptr_t addr);
+    void ProcessPendingActions();
 
     ProcessManager& GetProcess() { return m_process; }
     Disassembler& GetDisasm() { return m_disasm; }
@@ -85,6 +86,18 @@ private:
     int m_cachedResultScroll = -1; // invalidate when scroll changes
 
     int m_menuOpen = -1;
+
+    // Pending deferred actions (can't run modal loops during WM_PAINT)
+    int m_pendingMenu = -1;        // 0=File, 1=Tools, 2=Help
+    bool m_pendingSaveTable = false;
+    bool m_pendingLoadTable = false;
+    int m_pendingCtxMenu = 0;      // 0=none, 1=result, 2=table, 3=module
+    int m_pendingCtxX = 0, m_pendingCtxY = 0;
+    uintptr_t m_pendingCtxAddr = 0;
+    size_t m_pendingCtxEntryIdx = 0;
+    bool m_pendingToggleMemViewer = false;
+    bool m_pendingGoTo = false;
+    uintptr_t m_pendingGoToAddr = 0;
 
     // Manual add-address dialog state
     bool m_showAddDialog = false;

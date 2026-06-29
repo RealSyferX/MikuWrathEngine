@@ -244,43 +244,7 @@ void App::RenderMenuBar() {
         UI::DrawText(m_ui.g, x + 6, rc.top + 4, menus[i], Theme::CLR_TEXT());
 
         if (hovered && m_ui.mousePressed) {
-            m_menuOpen = (m_menuOpen == i) ? -1 : i;
-            if (m_menuOpen == i) {
-                POINT pt = { btn.left, btn.bottom };
-                ClientToScreen(m_hwnd, &pt);
-                HMENU menu = CreatePopupMenu();
-                if (i == 0) {
-                    AppendMenuA(menu, MF_STRING, 101, "Save Table");
-                    AppendMenuA(menu, MF_STRING, 102, "Load Table");
-                    AppendMenuA(menu, MF_SEPARATOR, 0, nullptr);
-                    AppendMenuA(menu, MF_STRING, 103, "Exit");
-                } else if (i == 1) {
-                    AppendMenuA(menu, MF_STRING, 201, "Memory Viewer\tCtrl+M");
-                    AppendMenuA(menu, MF_STRING, 202, "Memory Regions");
-                    AppendMenuA(menu, MF_STRING, 203, "Module List");
-                } else {
-                    AppendMenuA(menu, MF_STRING, 301, "About MikuWrathEngine");
-                }
-                int result = (int)TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD,
-                    pt.x, pt.y, 0, m_hwnd, nullptr);
-                DestroyMenu(menu);
-                m_menuOpen = -1;
-
-                switch (result) {
-                case 101: {
-                    auto path = PickSaveFile("miku_table.mwt");
-                    if (!path.empty()) m_table.Save(path.c_str());
-                } break;
-                case 102: {
-                    auto path = PickOpenFile();
-                    if (!path.empty()) m_table.Load(path.c_str());
-                } break;
-                case 103: PostQuitMessage(0); break;
-                case 201: ToggleMemoryViewer(); break;
-                case 202: m_showRegionList = true; m_cachedRegions.clear(); m_regionCacheTimer = 2.0f; break;
-                case 203: m_showModuleList = true; m_cachedModules.clear(); m_moduleCacheTimer = 2.0f; break;
-                }
-            }
+            m_pendingMenu = i;
         }
         x += tw + 16;
     }
@@ -585,12 +549,10 @@ void App::RenderAddressTable() {
     }
     if (UI::Button(m_ui, 31, {78, ty, 144, ty+20}, "Clear All")) m_table.Clear();
     if (UI::Button(m_ui, 32, {152, ty, 200, ty+20}, "Save")) {
-        auto path = PickSaveFile("miku_table.mwt");
-        if (!path.empty()) m_table.Save(path.c_str());
+        m_pendingSaveTable = true;
     }
     if (UI::Button(m_ui, 33, {208, ty, 256, ty+20}, "Load")) {
-        auto path = PickOpenFile();
-        if (!path.empty()) m_table.Load(path.c_str());
+        m_pendingLoadTable = true;
     }
 
     UI::DrawText(m_ui.g, 270, ty+2, "Right-click row for options", Theme::CLR_DIM());
@@ -997,18 +959,10 @@ void App::RenderModuleList() {
             m_showModuleList = false;
         }
         if (m_ui.PtInRect(rowRc) && m_ui.mouseRightPressed) {
-            HMENU menu = CreatePopupMenu();
-            AppendMenuA(menu, MF_STRING, 1, "Browse in Memory Viewer");
-            AppendMenuA(menu, MF_STRING, 2, "Copy Base Address");
-            POINT pt = {m_ui.mouse.x, m_ui.mouse.y};
-            ClientToScreen(m_hwnd, &pt);
-            int res = (int)TrackPopupMenu(menu, TPM_RETURNCMD, pt.x, pt.y, 0, m_hwnd, nullptr);
-            DestroyMenu(menu);
-            if (res == 1) { GoToAddress(m.base); m_showModuleList = false; }
-            if (res == 2) {
-                char ab[32]; snprintf(ab, sizeof(ab), "0x%llX", (unsigned long long)m.base);
-                CopyToClipboard(m_hwnd, ab);
-            }
+            m_pendingCtxMenu = 3;
+            m_pendingCtxX = m_ui.mouse.x;
+            m_pendingCtxY = m_ui.mouse.y;
+            m_pendingCtxAddr = m.base;
         }
     }
 
@@ -1028,47 +982,17 @@ void App::RenderModuleList() {
 // Context menus
 // ============================================================
 void App::ShowResultContextMenu(int x, int y, uintptr_t addr) {
-    HMENU menu = CreatePopupMenu();
-    AppendMenuA(menu, MF_STRING, 1, "Add to Address Table");
-    AppendMenuA(menu, MF_STRING, 2, "Browse Memory Region");
-    AppendMenuA(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuA(menu, MF_STRING, 3, "Copy Address");
-    POINT pt = {x, y}; ClientToScreen(m_hwnd, &pt);
-    int res = (int)TrackPopupMenu(menu, TPM_RETURNCMD, pt.x, pt.y, 0, m_hwnd, nullptr);
-    DestroyMenu(menu);
-    switch (res) {
-    case 1: m_table.Add(addr, m_scanner.GetValueType()); break;
-    case 2: GoToAddress(addr); break;
-    case 3: {
-        char buf[32]; snprintf(buf, sizeof(buf), "0x%llX", (unsigned long long)addr);
-        CopyToClipboard(m_hwnd, buf);
-    } break;
-    }
+    m_pendingCtxMenu = 1;
+    m_pendingCtxX = x;
+    m_pendingCtxY = y;
+    m_pendingCtxAddr = addr;
 }
 
 void App::ShowTableContextMenu(int x, int y, size_t entryIdx) {
-    HMENU menu = CreatePopupMenu();
-    AppendMenuA(menu, MF_STRING, 1, "Browse in Memory Viewer");
-    AppendMenuA(menu, MF_STRING, 2, "Copy Address");
-    AppendMenuA(menu, MF_STRING, 3, "Copy Value");
-    AppendMenuA(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuA(menu, MF_STRING, 4, "Delete Entry");
-    POINT pt = {x, y}; ClientToScreen(m_hwnd, &pt);
-    int res = (int)TrackPopupMenu(menu, TPM_RETURNCMD, pt.x, pt.y, 0, m_hwnd, nullptr);
-    DestroyMenu(menu);
-    auto& entries = m_table.Entries();
-    if (entryIdx >= entries.size()) return;
-    switch (res) {
-    case 1: GoToAddress(entries[entryIdx].address); break;
-    case 2: {
-        char buf[32]; snprintf(buf, sizeof(buf), "0x%llX", (unsigned long long)entries[entryIdx].address);
-        CopyToClipboard(m_hwnd, buf);
-    } break;
-    case 3: {
-        CopyToClipboard(m_hwnd, entries[entryIdx].editValue);
-    } break;
-    case 4: m_table.Remove(entryIdx); break;
-    }
+    m_pendingCtxMenu = 2;
+    m_pendingCtxX = x;
+    m_pendingCtxY = y;
+    m_pendingCtxEntryIdx = entryIdx;
 }
 
 // ============================================================
@@ -1099,19 +1023,172 @@ void App::DoResetScan() {
 }
 
 void App::ToggleMemoryViewer() {
-    if (!m_memViewer->IsCreated()) {
-        m_memViewer->Create(m_hwnd, GetModuleHandleW(nullptr));
-    }
-    if (!m_memViewer->IsVisible()) {
-        m_memViewer->Show();
-    } else {
-        m_memViewer->Hide();
-    }
+    m_pendingToggleMemViewer = true;
 }
 
 void App::GoToAddress(uintptr_t addr) {
-    ToggleMemoryViewer();
-    m_memViewer->GoToAddress(addr);
+    m_pendingGoTo = true;
+    m_pendingGoToAddr = addr;
+    m_pendingToggleMemViewer = true;
+}
+
+// ============================================================
+// Process pending deferred actions (called from message loop
+// after DispatchMessage returns — safe to run modal loops here)
+// ============================================================
+void App::ProcessPendingActions() {
+    // Pending combo box popup
+    if (m_ui.pendingComboId != -1) {
+        HMENU menu = CreatePopupMenu();
+        for (int i = 0; i < m_ui.pendingComboCount; i++) {
+            AppendMenuA(menu, MF_STRING | (i == *m_ui.pendingComboSelected ? MF_CHECKED : 0), i + 1, m_ui.pendingComboItems[i]);
+        }
+        POINT pt = { m_ui.pendingComboRc.left, m_ui.pendingComboRc.bottom };
+        ClientToScreen(m_hwnd, &pt);
+        int result = (int)TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD, pt.x, pt.y, 0, m_hwnd, nullptr);
+        DestroyMenu(menu);
+        if (result > 0) *m_ui.pendingComboSelected = result - 1;
+        m_ui.pendingComboId = -1;
+        InvalidateRect(m_hwnd, nullptr, FALSE);
+    }
+
+    // Pending menu bar popup
+    if (m_pendingMenu >= 0) {
+        int i = m_pendingMenu;
+        m_pendingMenu = -1;
+        HMENU menu = CreatePopupMenu();
+        POINT pt = {0, 0};
+        if (i == 0) {
+            AppendMenuA(menu, MF_STRING, 101, "Save Table...");
+            AppendMenuA(menu, MF_STRING, 102, "Load Table...");
+            AppendMenuA(menu, MF_SEPARATOR, 0, nullptr);
+            AppendMenuA(menu, MF_STRING, 103, "Exit");
+        } else if (i == 1) {
+            AppendMenuA(menu, MF_STRING, 201, "Memory Viewer\tCtrl+M");
+            AppendMenuA(menu, MF_STRING, 202, "Memory Regions");
+            AppendMenuA(menu, MF_STRING, 203, "Module List");
+        } else {
+            AppendMenuA(menu, MF_STRING, 301, "About MikuWrathEngine");
+            AppendMenuA(menu, MF_SEPARATOR, 0, nullptr);
+            AppendMenuA(menu, MF_STRING, 302, "v2.0 - GDI+ Edition");
+        }
+        // Position at menu button
+        pt.x = 4 + i * 50;  // approximate
+        pt.y = Theme::TITLE_H + Theme::MENU_H;
+        ClientToScreen(m_hwnd, &pt);
+        int result = (int)TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD, pt.x, pt.y, 0, m_hwnd, nullptr);
+        DestroyMenu(menu);
+        switch (result) {
+        case 101: m_pendingSaveTable = true; break;
+        case 102: m_pendingLoadTable = true; break;
+        case 103: PostQuitMessage(0); break;
+        case 201: m_pendingToggleMemViewer = true; break;
+        case 202: m_showRegionList = true; m_cachedRegions.clear(); m_regionCacheTimer = 2.0f; break;
+        case 203: m_showModuleList = true; m_cachedModules.clear(); m_moduleCacheTimer = 2.0f; break;
+        }
+        InvalidateRect(m_hwnd, nullptr, FALSE);
+    }
+
+    // Pending file save dialog
+    if (m_pendingSaveTable) {
+        m_pendingSaveTable = false;
+        auto path = PickSaveFile("miku_table.mwt");
+        if (!path.empty()) m_table.Save(path.c_str());
+    }
+
+    // Pending file load dialog
+    if (m_pendingLoadTable) {
+        m_pendingLoadTable = false;
+        auto path = PickOpenFile();
+        if (!path.empty()) m_table.Load(path.c_str());
+    }
+
+    // Pending context menu (results)
+    if (m_pendingCtxMenu == 1) {
+        m_pendingCtxMenu = 0;
+        HMENU menu = CreatePopupMenu();
+        AppendMenuA(menu, MF_STRING, 1, "Add to Address Table");
+        AppendMenuA(menu, MF_STRING, 2, "Browse Memory Region");
+        AppendMenuA(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuA(menu, MF_STRING, 3, "Copy Address");
+        POINT pt = {m_pendingCtxX, m_pendingCtxY};
+        ClientToScreen(m_hwnd, &pt);
+        int res = (int)TrackPopupMenu(menu, TPM_RETURNCMD, pt.x, pt.y, 0, m_hwnd, nullptr);
+        DestroyMenu(menu);
+        switch (res) {
+        case 1: m_table.Add(m_pendingCtxAddr, m_scanner.GetValueType()); break;
+        case 2: m_pendingGoTo = true; m_pendingGoToAddr = m_pendingCtxAddr; m_pendingToggleMemViewer = true; break;
+        case 3: { char b[32]; snprintf(b,sizeof(b),"0x%llX",(unsigned long long)m_pendingCtxAddr); CopyToClipboard(m_hwnd, b); } break;
+        }
+        InvalidateRect(m_hwnd, nullptr, FALSE);
+    }
+
+    // Pending context menu (table)
+    if (m_pendingCtxMenu == 2) {
+        m_pendingCtxMenu = 0;
+        auto& entries = m_table.Entries();
+        size_t idx = m_pendingCtxEntryIdx;
+        HMENU menu = CreatePopupMenu();
+        AppendMenuA(menu, MF_STRING, 1, "Browse in Memory Viewer");
+        AppendMenuA(menu, MF_STRING, 2, "Copy Address");
+        AppendMenuA(menu, MF_STRING, 3, "Copy Value");
+        AppendMenuA(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuA(menu, MF_STRING, 4, "Delete Entry");
+        POINT pt = {m_pendingCtxX, m_pendingCtxY};
+        ClientToScreen(m_hwnd, &pt);
+        int res = (int)TrackPopupMenu(menu, TPM_RETURNCMD, pt.x, pt.y, 0, m_hwnd, nullptr);
+        DestroyMenu(menu);
+        if (idx < entries.size()) {
+            switch (res) {
+            case 1: m_pendingGoTo = true; m_pendingGoToAddr = entries[idx].address; m_pendingToggleMemViewer = true; break;
+            case 2: { char b[32]; snprintf(b,sizeof(b),"0x%llX",(unsigned long long)entries[idx].address); CopyToClipboard(m_hwnd, b); } break;
+            case 3: CopyToClipboard(m_hwnd, entries[idx].editValue); break;
+            case 4: m_table.Remove(idx); break;
+            }
+        }
+        InvalidateRect(m_hwnd, nullptr, FALSE);
+    }
+
+    // Pending context menu (module list)
+    if (m_pendingCtxMenu == 3) {
+        m_pendingCtxMenu = 0;
+        HMENU menu = CreatePopupMenu();
+        AppendMenuA(menu, MF_STRING, 1, "Browse in Memory Viewer");
+        AppendMenuA(menu, MF_STRING, 2, "Copy Base Address");
+        POINT pt = {m_pendingCtxX, m_pendingCtxY};
+        ClientToScreen(m_hwnd, &pt);
+        int res = (int)TrackPopupMenu(menu, TPM_RETURNCMD, pt.x, pt.y, 0, m_hwnd, nullptr);
+        DestroyMenu(menu);
+        switch (res) {
+        case 1: m_pendingGoTo = true; m_pendingGoToAddr = m_pendingCtxAddr; m_pendingToggleMemViewer = true; m_showModuleList = false; break;
+        case 2: { char b[32]; snprintf(b,sizeof(b),"0x%llX",(unsigned long long)m_pendingCtxAddr); CopyToClipboard(m_hwnd, b); } break;
+        }
+        InvalidateRect(m_hwnd, nullptr, FALSE);
+    }
+
+    // Pending memory viewer toggle
+    if (m_pendingToggleMemViewer) {
+        m_pendingToggleMemViewer = false;
+        if (!m_memViewer->IsCreated()) {
+            m_memViewer->Create(m_hwnd, GetModuleHandleW(nullptr));
+        }
+        if (!m_memViewer->IsVisible()) {
+            m_memViewer->Show();
+        } else if (!m_pendingGoTo) {
+            m_memViewer->Hide();
+        }
+    }
+
+    // Pending go to address
+    if (m_pendingGoTo) {
+        m_pendingGoTo = false;
+        m_memViewer->GoToAddress(m_pendingGoToAddr);
+    }
+
+    // Process memory viewer pending actions
+    if (m_memViewer && m_memViewer->IsVisible()) {
+        m_memViewer->ProcessPendingActions();
+    }
 }
 
 // ============================================================
@@ -1197,10 +1274,7 @@ void App::HandleHotkeys() {
         m_processList = m_process.EnumerateProcesses();
         m_showProcessPicker = true;
         break;
-    case 'S': {
-        auto path = PickSaveFile("miku_table.mwt");
-        if (!path.empty()) m_table.Save(path.c_str());
-    } break;
+    case 'S': m_pendingSaveTable = true; break;
     case 'M': ToggleMemoryViewer(); break;
     case 'G': ToggleMemoryViewer(); break;
     }

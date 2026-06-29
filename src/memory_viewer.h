@@ -22,6 +22,7 @@ public:
     void SetAddToTableCallback(std::function<void(uintptr_t, ValueType)> cb) { m_addToTable = cb; }
 
     void GoToAddress(uintptr_t addr);
+    void ProcessPendingActions();
 
     LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam);
 
