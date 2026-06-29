@@ -15,6 +15,10 @@
 
 ### ⚡ A Cheat Engine clone built from scratch with native Win32 GDI+. No ImGui. No DirectX. Pure hand-rolled C++20. ⚡
 
+> ### 🚀 **Standalone. Portable. Zero Install.**
+> No setup. No installer. No runtime redistributables. No .NET, no Visual C++ runtime, no DirectX.
+> Just download `MikuWrathEngine.exe` and **double-click to run**. That's it.
+
 <p>
   <img alt="C++" src="https://img.shields.io/badge/C%2B%2B-20-00599C?style=for-the-badge&logo=c%2B%2B&logoColor=white">
   <img alt="CMake" src="https://img.shields.io/badge/CMake-3.16+-064F8C?style=for-the-badge&logo=cmake&logoColor=white">
@@ -45,7 +49,58 @@ The result is a lean, dependency-light binary that runs on stock Windows with **
 
 ---
 
+## 🚀 Quick Start
+
+### Option A: Download (Zero Build)
+
+1. Go to [Releases](https://github.com/RealSyferX/MikuWrathEngine/releases)
+2. Download `MikuWrathEngine.exe`
+3. Double-click. Done. ✅
+
+> **No installation. No prerequisites. No admin rights needed (unless the target process requires elevation). The exe is fully self-contained — Capstone is statically linked, GDI+ ships with Windows, and everything else is hand-rolled Win32.**
+
+### Option B: Build from Source
+
+#### Prerequisites
+
+- **Visual Studio 2022** (or Build Tools) with the **C++ workload**
+- **CMake 3.16+**
+- Windows 10/11 x64
+
+> Capstone 5.0.3 is fetched automatically via CMake `FetchContent` — no manual install needed.
+
+#### Build Script
+
+```bat
+:: Double-click or run in a terminal:
+build.bat
+```
+
+Output: `build\Release\MikuWrathEngine.exe`
+
+#### Manual CMake
+
+```bash
+# 1. Configure
+cmake -B build -A x64 -DCMAKE_BUILD_TYPE=Release
+
+# 2. Build
+cmake --build build --config Release --parallel
+```
+
+#### IDE — Visual Studio 2022
+
+Open the project folder in **Visual Studio 2022** (it detects `CMakeLists.txt` automatically), select the `x64-Release` profile, and hit `F5`.
+
+---
+
 ## ✨ Features
+
+### 📦 Distribution & Portability
+
+| Feature | Description |
+|---------|-------------|
+| 🪶 **Standalone EXE** | Single self-contained `.exe` — no installation, no DLLs, no redistributables. Capstone statically linked. Just run it. |
 
 ### 🔍 Process Management
 
@@ -167,41 +222,6 @@ Double-click any region or module to jump straight to it in the Memory Viewer. R
 | 🖼️ **Double-Buffered** | Flicker-free rendering via `CreateCompatibleDC` + `BitBlt` |
 | 🔤 **Consolas Font** | Monospaced rendering for hex, addresses, and disassembly |
 | 📐 **Responsive Layout** | Panels reflow and resize dynamically — controls never go off-screen |
-
----
-
-## 🛠️ Build Instructions
-
-### Prerequisites
-
-- **Visual Studio 2022** (or Build Tools) with the **C++ workload**
-- **CMake 3.16+**
-- Windows 10/11 x64
-
-> Capstone 5.0.3 is fetched automatically via CMake `FetchContent` — no manual install needed.
-
-### Option A — Build Script
-
-```bat
-:: Double-click or run in a terminal:
-build.bat
-```
-
-Output: `build\Release\MikuWrathEngine.exe`
-
-### Option B — Manual CMake
-
-```bash
-# 1. Configure
-cmake -B build -A x64 -DCMAKE_BUILD_TYPE=Release
-
-# 2. Build
-cmake --build build --config Release --parallel
-```
-
-### Option C — IDE
-
-Open the project folder in **Visual Studio 2022** (it detects `CMakeLists.txt` automatically), select the `x64-Release` profile, and hit `F5`.
 
 ---
 
