@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cctype>
 #include <algorithm>
 #include <sstream>
 
@@ -309,12 +310,120 @@ void MemoryViewer::OnMouseWheel(int delta) {
 }
 
 void MemoryViewer::OnChar(wchar_t ch) {
+    if (m_hexEditing && m_hexSelLine >= 0 && m_hexSelCol >= 0 &&
+        m_hexSelLine < m_hexLines && m_hexSelCol < m_hexCols) {
+        if (isxdigit((int)ch)) {
+            int val = (ch >= '0' && ch <= '9') ? ch - '0' :
+                      (ch >= 'A' && ch <= 'F') ? ch - 'A' + 10 : ch - 'a' + 10;
+
+            uintptr_t addr = m_hexAddr + (uintptr_t)(m_hexSelLine * m_hexCols + m_hexSelCol);
+            uint8_t current = 0;
+            if (m_pm && m_pm->IsOpen() && m_pm->Read(addr, &current, 1)) {
+                if (m_hexNibble == 0) {
+                    current = (uint8_t)((current & 0x0F) | (val << 4));
+                } else {
+                    current = (uint8_t)((current & 0xF0) | val);
+                }
+                m_pm->Write(addr, &current, 1);
+
+                m_hexNibble++;
+                if (m_hexNibble >= 2) {
+                    m_hexNibble = 0;
+                    m_hexSelCol++;
+                    if (m_hexSelCol >= m_hexCols) {
+                        m_hexSelCol = 0;
+                        m_hexSelLine++;
+                        if (m_hexSelLine >= m_hexLines) {
+                            ScrollHex(1);
+                            m_hexSelLine = m_hexLines - 1;
+                        }
+                    }
+                }
+            }
+            InvalidateRect(m_hwnd, nullptr, FALSE);
+            return;
+        }
+        // Non-hex char while editing: fall through to let widgets handle it
+        // (e.g. Ctrl+C for copy won't arrive via WM_CHAR anyway)
+    }
+
     m_ui.charInput = ch;
     m_ui.hasCharInput = true;
     InvalidateRect(m_hwnd, nullptr, FALSE);
 }
 
 void MemoryViewer::OnKeyDown(WPARAM key) {
+    // Hex editing mode: handle navigation before anything else
+    if (m_hexEditing) {
+        switch (key) {
+        case VK_LEFT:
+            if (m_hexSelCol > 0) {
+                m_hexSelCol--;
+            } else if (m_hexSelLine > 0) {
+                m_hexSelCol = m_hexCols - 1;
+                m_hexSelLine--;
+            }
+            m_hexNibble = 0;
+            break;
+        case VK_RIGHT:
+            if (m_hexSelCol < m_hexCols - 1) {
+                m_hexSelCol++;
+            } else {
+                m_hexSelCol = 0;
+                m_hexSelLine++;
+                if (m_hexSelLine >= m_hexLines) {
+                    ScrollHex(1);
+                    m_hexSelLine = m_hexLines - 1;
+                }
+            }
+            m_hexNibble = 0;
+            break;
+        case VK_UP:
+            if (m_hexSelLine > 0) m_hexSelLine--;
+            m_hexNibble = 0;
+            break;
+        case VK_DOWN:
+            m_hexSelLine++;
+            if (m_hexSelLine >= m_hexLines) {
+                ScrollHex(1);
+                m_hexSelLine = m_hexLines - 1;
+            }
+            m_hexNibble = 0;
+            break;
+        case VK_ESCAPE:
+            m_hexEditing = false;
+            m_hexSelLine = -1;
+            m_hexSelCol = -1;
+            break;
+        case VK_TAB:
+            m_hexSelCol++;
+            if (m_hexSelCol >= m_hexCols) {
+                m_hexSelCol = 0;
+                m_hexSelLine++;
+                if (m_hexSelLine >= m_hexLines) {
+                    ScrollHex(1);
+                    m_hexSelLine = m_hexLines - 1;
+                }
+            }
+            m_hexNibble = 0;
+            break;
+        case VK_HOME:
+            m_hexSelCol = 0;
+            m_hexNibble = 0;
+            break;
+        case VK_END:
+            m_hexSelCol = m_hexCols - 1;
+            m_hexNibble = 0;
+            break;
+        default:
+            // Let other keys fall through to normal processing
+            // only if not a navigation/editing key
+            break;
+        }
+        InvalidateRect(m_hwnd, nullptr, FALSE);
+        return;
+    }
+
     m_ui.keyCode = (int)key;
     m_ui.keyPressed = true;
     m_ui.keyCtrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
@@ -405,6 +514,7 @@ void MemoryViewer::RenderAddrBar(Gdiplus::Graphics* g, RECT& rc) {
     if (m_ui.PtInRect(inputRc) && m_ui.mousePressed) {
         m_addrBarFocus = true;
         m_ui.focusId = 1000;
+        m_hexEditing = false;  // clicking the address bar exits hex editing
     }
     if (m_addrBarFocus) m_ui.focusId = 1000;
 
@@ -487,8 +597,21 @@ void MemoryViewer::RenderHex(Gdiplus::Graphics* g, RECT& rc) {
         return;
     }
 
-    int y = rc.top + 2;
+    // Measure character width for hit-testing and highlight positioning.
+    // Consolas 9px is monospaced, so every glyph shares the same advance width.
+    int refW = 0, refH = 0;
+    UI::MeasureText(g, "00000000000000000000", nullptr, &refW, &refH); // 20 chars
+    int charW = (refW > 0) ? (refW + 10) / 20 : 6; // round, fallback to 6px
     int lineH = 16;
+
+    // Layout: "ADDR  " (18 chars) | hex bytes ("XX " = 3 chars each) | " |" (2 chars) | ASCII (1 char each) | "|"
+    int textX = rc.left + 2;
+    int hexStartX = textX + 18 * charW;              // address prefix = 16 hex + 2 spaces
+    int byteW = 3 * charW;                            // each byte = "XX "
+    int sepW = 2 * charW;                              // " |" (space + pipe before ASCII)
+    int asciiStartX = hexStartX + m_hexCols * byteW + sepW;
+
+    int y = rc.top + 2;
     char out[512];
 
     for (int line = 0; line < m_hexLines && y < rc.bottom; line++) {
@@ -503,7 +626,51 @@ void MemoryViewer::RenderHex(Gdiplus::Graphics* g, RECT& rc) {
         }
         out[pos++] = '|'; out[pos] = '\0';
 
-        UI::DrawText(g, rc.left + 2, y + 1, out, Theme::CLR_TEXT());
+        // Draw selection highlight BEFORE text so the text renders on top
+        if (m_hexEditing && line == m_hexSelLine &&
+            m_hexSelCol >= 0 && m_hexSelCol < m_hexCols) {
+            int byteX = hexStartX + m_hexSelCol * byteW;
+            // Highlight the 2 hex chars (not the trailing space)
+            RECT selRc = { byteX - 1, y, byteX + 2 * charW, y + lineH };
+            UI::FillRect(g, selRc, Theme::BG_SELECTED());
+
+            // Mirror the highlight in the ASCII column
+            int asciiX = asciiStartX + m_hexSelCol * charW;
+            RECT asciiSelRc = { asciiX - 1, y, asciiX + charW, y + lineH };
+            UI::FillRect(g, asciiSelRc, Theme::BG_SELECTED());
+
+            // Nibble caret — blinks with the caret timer
+            if (m_caretBlink) {
+                int caretX = (m_hexNibble == 0) ? byteX : byteX + charW;
+                Gdiplus::Pen pen(Theme::NEON(), 1.0f);
+                g->DrawLine(&pen, caretX, y + 1, caretX, y + lineH - 1);
+            }
+        }
+
+        UI::DrawText(g, textX, y + 1, out, Theme::CLR_TEXT());
+
+        // Click-to-select: compute which byte was clicked (hex or ASCII column)
+        if (m_ui.mousePressed) {
+            int mx = m_ui.mouse.x;
+            int my = m_ui.mouse.y;
+            if (my >= y && my < y + lineH) {
+                int clickedCol = -1;
+                if (mx >= hexStartX && mx < hexStartX + m_hexCols * byteW) {
+                    clickedCol = (mx - hexStartX) / byteW;
+                } else if (mx >= asciiStartX && mx < asciiStartX + m_hexCols * charW) {
+                    clickedCol = (mx - asciiStartX) / charW;
+                }
+                if (clickedCol >= 0 && clickedCol < m_hexCols) {
+                    m_hexSelLine = line;
+                    m_hexSelCol = clickedCol;
+                    m_hexEditing = true;
+                    m_hexNibble = 0;
+                    m_addrBarFocus = false;
+                    m_ui.focusId = -1;
+                }
+            }
+        }
+
         y += lineH;
     }
 }

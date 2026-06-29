@@ -42,6 +42,12 @@ private:
     std::vector<DisasmInstruction> m_disasmView;
     uintptr_t m_selectedAddr = 0;
 
+    // Inline hex byte editor state
+    int m_hexSelLine = -1;
+    int m_hexSelCol = -1;
+    bool m_hexEditing = false;
+    int m_hexNibble = 0; // 0=high nibble, 1=low nibble
+
     bool m_addrBarFocus = false;
     UINT_PTR m_caretTimer = 0;
     bool m_caretBlink = true;
