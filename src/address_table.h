@@ -5,11 +5,12 @@
 
 class AddressTable {
 public:
+    std::vector<AddressEntry>& Entries() { return m_entries; }
+
     void Add(uintptr_t addr, ValueType type, const char* desc = "");
     void Remove(size_t index);
     void Clear();
 
-    void Render(const ProcessManager& pm);
     void UpdateFrozen(const ProcessManager& pm, float dt);
     void UpdateValues(const ProcessManager& pm);
 
@@ -18,12 +19,18 @@ public:
 
     size_t Count() const { return m_entries.size(); }
 
+    // Returns index of selected entry, or -1
+    int GetSelected() const { return m_selected; }
+    void SetSelected(int idx) { m_selected = idx; }
+
+    int m_scrollPos = 0;
+
 private:
     std::vector<AddressEntry> m_entries;
     float m_freezeTimer = 0.0f;
-    float m_valueTimer = 0.0f;
+    int m_selected = -1;
 
-    void WriteValue(const ProcessManager& pm, size_t index);
-    std::string ReadValueString(const ProcessManager& pm, uintptr_t addr, ValueType type) const;
     bool WriteValueString(const ProcessManager& pm, uintptr_t addr, ValueType type, const char* str) const;
 };
+
+std::string ReadValueString(const ProcessManager& pm, uintptr_t addr, ValueType type);
