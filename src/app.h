@@ -37,6 +37,8 @@ private:
 
     bool m_showMemViewer = false;
     bool m_showProcessPicker = false;
+    bool m_showRegionList = false;
+    bool m_showModuleList = false;
     int m_selectedResult = -1;
 
     std::vector<ProcessInfo> m_processList;
@@ -50,6 +52,9 @@ private:
     void RenderScanPanel();
     void RenderResults();
     void RenderProcessPicker();
+    void RenderRegionList();
+    void RenderModuleList();
+    void HandleHotkeys();
 
     void DoNewScan();
     void DoNextScan();

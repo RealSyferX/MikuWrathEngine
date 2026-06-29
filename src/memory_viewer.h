@@ -34,11 +34,19 @@ private:
 
     bool m_addrBarFocus = false;
 
+    char m_patchBuf[256] = {};
+    bool m_showPatchPopup = false;
+    uintptr_t m_patchAddr = 0;
+    size_t m_patchMaxLen = 0;
+
     void RenderAddressBar();
     void RenderHexView();
     void RenderDisasmView();
+    void RenderPatchPopup();
     void RefreshDisasm();
     void ScrollHex(int lines);
     void ScrollDisasm(int lines);
     void ParseAndGo();
+    void DoNOP(uintptr_t addr, size_t len);
+    void DoPatch(uintptr_t addr, const char* hexStr);
 };

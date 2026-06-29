@@ -4,6 +4,7 @@
 #include <cstring>
 #include <algorithm>
 #include <cctype>
+#include <sstream>
 
 bool App::Stristr(const std::string& haystack, const std::string& needle) {
     if (needle.empty()) return true;
@@ -189,6 +190,16 @@ void App::Render() {
         RenderProcessPicker();
     }
 
+    if (m_showRegionList) {
+        RenderRegionList();
+    }
+
+    if (m_showModuleList) {
+        RenderModuleList();
+    }
+
+    HandleHotkeys();
+
     if (!open) {
         PostQuitMessage(0);
     }
@@ -210,11 +221,22 @@ void App::RenderMenuBar() {
             if (ImGui::MenuItem("Memory Viewer", "Ctrl+M")) {
                 m_showMemViewer = !m_showMemViewer;
             }
+            if (ImGui::MenuItem("Memory Regions")) {
+                m_showRegionList = !m_showRegionList;
+            }
+            if (ImGui::MenuItem("Module List")) {
+                m_showModuleList = !m_showModuleList;
+            }
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Help")) {
-            ImGui::TextDisabled("MikuWrathEngine v1.0");
-            ImGui::TextDisabled("Basic Cheat Engine Clone");
+            ImGui::TextDisabled("MikuWrathEngine v1.1");
+            ImGui::TextDisabled("Cheat Engine Clone - Overlay Edition");
+            ImGui::Separator();
+            ImGui::TextDisabled("Hotkeys:");
+            ImGui::TextDisabled("  Ctrl+F - Scan | Ctrl+R - Reset");
+            ImGui::TextDisabled("  Ctrl+O - Open Process | Ctrl+S - Save");
+            ImGui::TextDisabled("  Ctrl+M - Memory Viewer | Ctrl+G - Go Addr");
             ImGui::EndMenu();
         }
         ImGui::EndMenuBar();
@@ -224,6 +246,191 @@ void App::RenderMenuBar() {
     if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_M)) {
         m_showMemViewer = !m_showMemViewer;
     }
+}
+
+// ============================================================
+// Hotkeys
+// ============================================================
+void App::HandleHotkeys() {
+    ImGuiIO& io = ImGui::GetIO();
+    if (!io.KeyCtrl) return;
+
+    if (ImGui::IsKeyPressed(ImGuiKey_F)) {
+        if (m_process.IsOpen() && !m_scanner.IsScanning()) {
+            if (m_scanner.IsFirstScan()) DoNewScan();
+            else DoNextScan();
+        }
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_R)) {
+        DoResetScan();
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_O)) {
+        m_processList = m_process.EnumerateProcesses();
+        m_showProcessPicker = true;
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_S)) {
+        m_table.Save("miku_table.mwt");
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_G)) {
+        m_showMemViewer = true;
+    }
+}
+
+// ============================================================
+// Memory region list
+// ============================================================
+void App::RenderRegionList() {
+    ImGui::SetNextWindowSize(ImVec2(600, 400), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Memory Regions", &m_showRegionList, ImGuiWindowFlags_NoCollapse)) {
+        if (!m_process.IsOpen()) {
+            ImGui::TextDisabled("No process selected");
+            ImGui::End();
+            return;
+        }
+
+        if (ImGui::Button("Refresh")) {
+            // Regions are enumerated on demand
+        }
+
+        auto regions = m_process.EnumerateRegions(false);
+
+        if (ImGui::BeginTable("RegionTable", 5,
+            ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
+            ImGuiTableFlags_Resizable | ImGuiTableFlags_Sortable)) {
+            ImGui::TableSetupColumn("Base", ImGuiTableColumnFlags_WidthFixed, 140);
+            ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 120);
+            ImGui::TableSetupColumn("End", ImGuiTableColumnFlags_WidthFixed, 140);
+            ImGui::TableSetupColumn("Protection", ImGuiTableColumnFlags_WidthFixed, 120);
+            ImGui::TableSetupColumn("Writable", ImGuiTableColumnFlags_WidthFixed, 60);
+            ImGui::TableHeadersRow();
+
+            ImGuiListClipper clipper;
+            clipper.Begin((int)regions.size());
+            while (clipper.Step()) {
+                for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++) {
+                    auto& r = regions[i];
+                    ImGui::TableNextRow();
+                    ImGui::PushID(i);
+
+                    ImGui::TableNextColumn();
+                    char baseStr[32];
+                    snprintf(baseStr, sizeof(baseStr), "0x%016llX", (unsigned long long)r.base);
+                    if (ImGui::Selectable(baseStr, false, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick)) {
+                        if (ImGui::IsMouseDoubleClicked(0)) {
+                            m_memViewer.GoToAddress(r.base);
+                            m_showMemViewer = true;
+                        }
+                    }
+
+                    ImGui::TableNextColumn();
+                    char sizeStr[32];
+                    snprintf(sizeStr, sizeof(sizeStr), "0x%llX (%zu KB)",
+                        (unsigned long long)r.size, r.size / 1024);
+                    ImGui::TextUnformatted(sizeStr);
+
+                    ImGui::TableNextColumn();
+                    ImGui::Text("0x%016llX", (unsigned long long)(r.base + r.size));
+
+                    ImGui::TableNextColumn();
+                    const char* protStr = "?";
+                    switch (r.protect) {
+                    case PAGE_NOACCESS:             protStr = "NOACCESS"; break;
+                    case PAGE_READONLY:             protStr = "READONLY"; break;
+                    case PAGE_READWRITE:            protStr = "READWRITE"; break;
+                    case PAGE_WRITECOPY:            protStr = "WRITECOPY"; break;
+                    case PAGE_EXECUTE:              protStr = "EXECUTE"; break;
+                    case PAGE_EXECUTE_READ:         protStr = "EXECUTE_READ"; break;
+                    case PAGE_EXECUTE_READWRITE:    protStr = "EXECUTE_RW"; break;
+                    case PAGE_EXECUTE_WRITECOPY:    protStr = "EXECUTE_WC"; break;
+                    default:                        protStr = "OTHER"; break;
+                    }
+                    ImGui::TextUnformatted(protStr);
+
+                    ImGui::TableNextColumn();
+                    ImGui::Text(r.writable ? "Yes" : "No");
+
+                    ImGui::PopID();
+                }
+            }
+            clipper.End();
+            ImGui::EndTable();
+        }
+
+        ImGui::Text("Total regions: %zu", regions.size());
+    }
+    ImGui::End();
+}
+
+// ============================================================
+// Module list
+// ============================================================
+void App::RenderModuleList() {
+    ImGui::SetNextWindowSize(ImVec2(600, 400), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Module List", &m_showModuleList, ImGuiWindowFlags_NoCollapse)) {
+        if (!m_process.IsOpen()) {
+            ImGui::TextDisabled("No process selected");
+            ImGui::End();
+            return;
+        }
+
+        auto mods = m_process.EnumerateModules();
+
+        if (ImGui::BeginTable("ModuleTable", 4,
+            ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
+            ImGuiTableFlags_Resizable)) {
+            ImGui::TableSetupColumn("Module", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Base", ImGuiTableColumnFlags_WidthFixed, 140);
+            ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 100);
+            ImGui::TableSetupColumn("End", ImGuiTableColumnFlags_WidthFixed, 140);
+            ImGui::TableHeadersRow();
+
+            ImGuiListClipper clipper;
+            clipper.Begin((int)mods.size());
+            while (clipper.Step()) {
+                for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++) {
+                    auto& m = mods[i];
+                    ImGui::TableNextRow();
+                    ImGui::PushID(i);
+
+                    ImGui::TableNextColumn();
+                    if (ImGui::Selectable(m.name.c_str(), false, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick)) {
+                        if (ImGui::IsMouseDoubleClicked(0)) {
+                            m_memViewer.GoToAddress(m.base);
+                            m_showMemViewer = true;
+                        }
+                    }
+                    if (ImGui::BeginPopupContextItem("ModCtx")) {
+                        if (ImGui::MenuItem("Browse in Memory Viewer")) {
+                            m_memViewer.GoToAddress(m.base);
+                            m_showMemViewer = true;
+                        }
+                        if (ImGui::MenuItem("Copy Base Address")) {
+                            char buf[32];
+                            snprintf(buf, sizeof(buf), "0x%llX", (unsigned long long)m.base);
+                            ImGui::SetClipboardText(buf);
+                        }
+                        ImGui::EndPopup();
+                    }
+
+                    ImGui::TableNextColumn();
+                    ImGui::Text("0x%016llX", (unsigned long long)m.base);
+
+                    ImGui::TableNextColumn();
+                    ImGui::Text("0x%llX", (unsigned long long)m.size);
+
+                    ImGui::TableNextColumn();
+                    ImGui::Text("0x%016llX", (unsigned long long)(m.base + m.size));
+
+                    ImGui::PopID();
+                }
+            }
+            clipper.End();
+            ImGui::EndTable();
+        }
+
+        ImGui::Text("Total modules: %zu", mods.size());
+    }
+    ImGui::End();
 }
 
 // ============================================================
@@ -237,6 +444,14 @@ void App::RenderProcessBar() {
             m_process.GetName().c_str(),
             m_process.GetPid(),
             m_process.Is64Bit() ? "x64" : "x86");
+        ImGui::PopStyleColor();
+
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.4f, 0.45f, 1.0f));
+        std::string path = m_process.GetProcessPath();
+        if (!path.empty()) {
+            ImGui::TextDisabled("  Path: %s", path.c_str());
+        }
         ImGui::PopStyleColor();
     } else {
         ImVec4 red(0.9f, 0.3f, 0.3f, 1.0f);
@@ -253,6 +468,14 @@ void App::RenderProcessBar() {
     ImGui::SameLine();
     if (ImGui::Button("Memory Viewer")) {
         m_showMemViewer = !m_showMemViewer;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Regions")) {
+        m_showRegionList = !m_showRegionList;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Modules")) {
+        m_showModuleList = !m_showModuleList;
     }
     ImGui::SameLine();
     if (m_process.IsOpen()) {
@@ -468,8 +691,11 @@ void App::RenderResults() {
                     (unsigned long long)results[i]);
                 bool selected = (m_selectedResult == i);
                 if (ImGui::Selectable(addrLabel, &selected,
-                    ImGuiSelectableFlags_SpanAllColumns)) {
+                    ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick)) {
                     m_selectedResult = i;
+                    if (ImGui::IsMouseDoubleClicked(0)) {
+                        m_table.Add(results[i], m_scanner.GetValueType());
+                    }
                 }
 
                 // Context menu

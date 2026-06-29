@@ -1,6 +1,9 @@
 #include "process_manager.h"
 #include <tlhelp32.h>
+#include <psapi.h>
 #include <algorithm>
+
+#pragma comment(lib, "psapi.lib")
 
 std::vector<ProcessInfo> ProcessManager::EnumerateProcesses() {
     std::vector<ProcessInfo> procs;
@@ -121,4 +124,67 @@ std::vector<MemoryRegion> ProcessManager::EnumerateRegions(bool writableOnly) co
     }
 
     return regions;
+}
+
+std::string ProcessManager::GetProcessPath() const {
+    if (!m_hProcess) return "";
+    wchar_t path[MAX_PATH] = {};
+    DWORD len = MAX_PATH;
+    if (QueryFullProcessImageNameW(m_hProcess, 0, path, &len)) {
+        char buf[MAX_PATH];
+        WideCharToMultiByte(CP_UTF8, 0, path, -1, buf, MAX_PATH, nullptr, nullptr);
+        return buf;
+    }
+    return "";
+}
+
+uintptr_t ProcessManager::GetModuleBase(const char* moduleName) const {
+    if (!m_hProcess) return 0;
+    HMODULE mods[1024];
+    DWORD needed = 0;
+    if (!EnumProcessModulesEx(m_hProcess, mods, sizeof(mods), &needed, LIST_MODULES_ALL))
+        return 0;
+    int count = needed / sizeof(HMODULE);
+    for (int i = 0; i < count; i++) {
+        wchar_t wname[MAX_PATH];
+        if (GetModuleBaseNameW(m_hProcess, mods[i], wname, MAX_PATH)) {
+            char nameBuf[MAX_PATH];
+            WideCharToMultiByte(CP_UTF8, 0, wname, -1, nameBuf, MAX_PATH, nullptr, nullptr);
+            if (!moduleName || _stricmp(nameBuf, moduleName) == 0) {
+                MODULEINFO mi;
+                if (GetModuleInformation(m_hProcess, mods[i], &mi, sizeof(mi))) {
+                    return (uintptr_t)mi.lpBaseOfDll;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+std::vector<ProcessManager::ModuleInfo> ProcessManager::EnumerateModules() const {
+    std::vector<ModuleInfo> mods;
+    if (!m_hProcess) return mods;
+
+    HMODULE hMods[1024];
+    DWORD needed = 0;
+    if (!EnumProcessModulesEx(m_hProcess, hMods, sizeof(hMods), &needed, LIST_MODULES_ALL))
+        return mods;
+
+    int count = needed / sizeof(HMODULE);
+    for (int i = 0; i < count; i++) {
+        wchar_t wname[MAX_PATH];
+        if (GetModuleBaseNameW(m_hProcess, hMods[i], wname, MAX_PATH)) {
+            MODULEINFO mi;
+            if (GetModuleInformation(m_hProcess, hMods[i], &mi, sizeof(mi))) {
+                ModuleInfo info;
+                info.base = (uintptr_t)mi.lpBaseOfDll;
+                info.size = mi.SizeOfImage;
+                char nameBuf[MAX_PATH];
+                WideCharToMultiByte(CP_UTF8, 0, wname, -1, nameBuf, MAX_PATH, nullptr, nullptr);
+                info.name = nameBuf;
+                mods.push_back(info);
+            }
+        }
+    }
+    return mods;
 }

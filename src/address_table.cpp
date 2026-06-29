@@ -206,8 +206,16 @@ void AddressTable::Render(const ProcessManager& pm) {
             snprintf(addrStr, sizeof(addrStr), "0x%016llX", (unsigned long long)e.address);
             ImGui::Selectable(addrStr, false, ImGuiSelectableFlags_AllowDoubleClick);
             if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
-                // Copy address to clipboard
                 ImGui::SetClipboardText(addrStr);
+            }
+            if (ImGui::BeginPopupContextItem("AddrCtx")) {
+                if (ImGui::MenuItem("Copy Address")) {
+                    ImGui::SetClipboardText(addrStr);
+                }
+                if (ImGui::MenuItem("Copy Value")) {
+                    ImGui::SetClipboardText(e.editValue);
+                }
+                ImGui::EndPopup();
             }
 
             // Type

@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
+#include <sstream>
 
 void MemoryViewer::GoToAddress(uintptr_t addr) {
     m_hexAddr = addr;
@@ -71,6 +72,60 @@ void MemoryViewer::ScrollDisasm(int lines) {
     }
 }
 
+void MemoryViewer::DoNOP(uintptr_t addr, size_t len) {
+    if (!m_pm || !m_pm->IsOpen() || len == 0) return;
+    std::vector<uint8_t> nops(len, 0x90);
+    m_pm->Write(addr, nops.data(), len);
+    RefreshDisasm();
+}
+
+void MemoryViewer::DoPatch(uintptr_t addr, const char* hexStr) {
+    if (!m_pm || !m_pm->IsOpen()) return;
+    std::vector<uint8_t> bytes;
+    std::istringstream iss(hexStr);
+    std::string tok;
+    while (iss >> tok) {
+        if (tok == "??" || tok == "?") {
+            bytes.push_back(0x90);
+        } else {
+            bytes.push_back((uint8_t)strtoul(tok.c_str(), nullptr, 16));
+        }
+    }
+    if (!bytes.empty()) {
+        m_pm->Write(addr, bytes.data(), bytes.size());
+        RefreshDisasm();
+    }
+}
+
+void MemoryViewer::RenderPatchPopup() {
+    if (!m_showPatchPopup) return;
+    ImGui::SetNextWindowSize(ImVec2(350, 120), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Patch Bytes", &m_showPatchPopup, ImGuiWindowFlags_NoCollapse)) {
+        ImGui::Text("Address: 0x%llX", (unsigned long long)m_patchAddr);
+        ImGui::Text("Max bytes: %zu", m_patchMaxLen);
+        ImGui::InputTextWithHint("##PatchInput", "e.g. 90 90 EB 05", m_patchBuf, sizeof(m_patchBuf));
+        ImGui::SameLine();
+        if (ImGui::Button("Patch")) {
+            DoPatch(m_patchAddr, m_patchBuf);
+            m_showPatchPopup = false;
+            m_patchBuf[0] = '\0';
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("NOP")) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%.*s", (int)m_patchMaxLen * 3, "90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 ");
+            DoPatch(m_patchAddr, buf);
+            m_showPatchPopup = false;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) {
+            m_showPatchPopup = false;
+            m_patchBuf[0] = '\0';
+        }
+    }
+    ImGui::End();
+}
+
 void MemoryViewer::Render() {
     ImGui::SetNextWindowSize(ImVec2(700, 500), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin("Memory Viewer", nullptr, ImGuiWindowFlags_NoCollapse)) {
@@ -85,6 +140,8 @@ void MemoryViewer::Render() {
     RenderHexView();
 
     ImGui::End();
+
+    RenderPatchPopup();
 }
 
 void MemoryViewer::RenderAddressBar() {
@@ -168,6 +225,26 @@ void MemoryViewer::RenderHexView() {
         else if (wheel < 0) ScrollHex(1);
     }
 
+    // Right-click context menu on hex view
+    if (ImGui::BeginPopupContextWindow("HexCtx")) {
+        if (ImGui::MenuItem("Edit Bytes...")) {
+            m_patchAddr = m_hexAddr;
+            m_patchMaxLen = m_hexLines * m_hexCols;
+            m_patchBuf[0] = '\0';
+            m_showPatchPopup = true;
+        }
+        if (ImGui::MenuItem("NOP Current Line")) {
+            DoNOP(m_hexAddr, m_hexCols);
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Copy Address")) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "0x%llX", (unsigned long long)m_hexAddr);
+            ImGui::SetClipboardText(buf);
+        }
+        ImGui::EndPopup();
+    }
+
     ImGui::EndChild();
 }
 
@@ -227,6 +304,17 @@ void MemoryViewer::RenderDisasmView() {
             if (ImGui::MenuItem("Add to Address Table")) {
                 if (m_addToTable) m_addToTable(inst.address, ValueType::Dword);
             }
+            ImGui::Separator();
+            if (ImGui::MenuItem("NOP This Instruction")) {
+                DoNOP(inst.address, inst.size);
+            }
+            if (ImGui::MenuItem("Patch Bytes...")) {
+                m_patchAddr = inst.address;
+                m_patchMaxLen = inst.size;
+                m_patchBuf[0] = '\0';
+                m_showPatchPopup = true;
+            }
+            ImGui::Separator();
             if (ImGui::MenuItem("Follow in Hex View")) {
                 m_hexAddr = inst.address;
             }

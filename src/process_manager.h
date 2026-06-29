@@ -20,6 +20,16 @@ public:
 
     std::vector<MemoryRegion> EnumerateRegions(bool writableOnly = false) const;
 
+    std::string GetProcessPath() const;
+    uintptr_t GetModuleBase(const char* moduleName = nullptr) const;
+
+    struct ModuleInfo {
+        uintptr_t base = 0;
+        size_t size = 0;
+        std::string name;
+    };
+    std::vector<ModuleInfo> EnumerateModules() const;
+
 private:
     HANDLE m_hProcess = nullptr;
     DWORD m_pid = 0;
