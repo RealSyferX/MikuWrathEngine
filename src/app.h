@@ -86,6 +86,12 @@ private:
 
     int m_menuOpen = -1;
 
+    // Manual add-address dialog state
+    bool m_showAddDialog = false;
+    char m_addAddrBuf[64] = {};
+    int m_addTypeIdx = 2; // 4 Bytes
+    char m_addDescBuf[128] = {};
+
     float m_dt = 0.0f;
     DWORD m_lastTick = 0;
     float m_updateTimer = 0.0f;
@@ -107,11 +113,15 @@ private:
     void RenderRegionList();
     void RenderModuleList();
     void RenderProcessPicker();
+    void RenderAddDialog();
 
     void DoNewScan();
     void DoNextScan();
     void DoResetScan();
     void WriteValueStr(AddressEntry& e);
+
+    std::string PickSaveFile(const char* defaultName);
+    std::string PickOpenFile();
 
     ValueType CurrentType() const { return (ValueType)m_typeIdx; }
     static bool Stristr(const std::string& haystack, const std::string& needle);

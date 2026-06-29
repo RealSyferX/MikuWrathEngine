@@ -6,6 +6,7 @@
 #include <cctype>
 #include <sstream>
 #include <string>
+#include <commdlg.h>
 
 #ifndef GET_X_LPARAM
 #define GET_X_LPARAM(lp) ((int)(short)LOWORD(lp))
@@ -32,6 +33,37 @@ App::App() {
 
 App::~App() {
     m_process.CloseTarget();
+}
+
+// ============================================================
+// File dialogs
+// ============================================================
+std::string App::PickSaveFile(const char* defaultName) {
+    char buf[MAX_PATH] = {};
+    strncpy(buf, defaultName, MAX_PATH - 1);
+    OPENFILENAMEA ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = m_hwnd;
+    ofn.lpstrFilter = "MikuWrath Table (*.mwt)\0*.mwt\0All Files (*.*)\0*.*\0";
+    ofn.lpstrFile = buf;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
+    ofn.lpstrDefExt = "mwt";
+    if (GetSaveFileNameA(&ofn)) return buf;
+    return "";
+}
+
+std::string App::PickOpenFile() {
+    char buf[MAX_PATH] = {};
+    OPENFILENAMEA ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = m_hwnd;
+    ofn.lpstrFilter = "MikuWrath Table (*.mwt)\0*.mwt\0All Files (*.*)\0*.*\0";
+    ofn.lpstrFile = buf;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+    if (GetOpenFileNameA(&ofn)) return buf;
+    return "";
 }
 
 // ============================================================
@@ -108,6 +140,11 @@ void App::OnPaint(Gdiplus::Graphics* g) {
         RenderResults();
         UI::DrawSeparator(g, m_layout.resultsPanel.bottom, 2, w - 2);
         RenderAddressTable();
+    }
+
+    // Manual add-address modal overlay
+    if (m_showAddDialog) {
+        RenderAddDialog();
     }
 
     // Reset one-shot input flags
@@ -229,8 +266,14 @@ void App::RenderMenuBar() {
                 m_menuOpen = -1;
 
                 switch (result) {
-                case 101: m_table.Save("miku_table.mwt"); break;
-                case 102: m_table.Load("miku_table.mwt"); break;
+                case 101: {
+                    auto path = PickSaveFile("miku_table.mwt");
+                    if (!path.empty()) m_table.Save(path.c_str());
+                } break;
+                case 102: {
+                    auto path = PickOpenFile();
+                    if (!path.empty()) m_table.Load(path.c_str());
+                } break;
                 case 103: PostQuitMessage(0); break;
                 case 201: ToggleMemoryViewer(); break;
                 case 202: m_showRegionList = true; m_cachedRegions.clear(); m_regionCacheTimer = 2.0f; break;
@@ -537,11 +580,17 @@ void App::RenderAddressTable() {
     // Toolbar
     int ty = rc.top + 3;
     if (UI::Button(m_ui, 30, {4, ty, 70, ty+20}, "Add")) {
-        if (m_process.IsOpen()) m_table.Add(0, ValueType::Dword);
+        m_showAddDialog = true;
     }
     if (UI::Button(m_ui, 31, {78, ty, 144, ty+20}, "Clear All")) m_table.Clear();
-    if (UI::Button(m_ui, 32, {152, ty, 200, ty+20}, "Save")) m_table.Save("miku_table.mwt");
-    if (UI::Button(m_ui, 33, {208, ty, 256, ty+20}, "Load")) m_table.Load("miku_table.mwt");
+    if (UI::Button(m_ui, 32, {152, ty, 200, ty+20}, "Save")) {
+        auto path = PickSaveFile("miku_table.mwt");
+        if (!path.empty()) m_table.Save(path.c_str());
+    }
+    if (UI::Button(m_ui, 33, {208, ty, 256, ty+20}, "Load")) {
+        auto path = PickOpenFile();
+        if (!path.empty()) m_table.Load(path.c_str());
+    }
 
     UI::DrawText(m_ui.g, 270, ty+2, "Right-click row for options", Theme::CLR_DIM());
 
@@ -653,6 +702,64 @@ void App::WriteValueStr(AddressEntry& e) {
         default: break;
         }
     } catch (...) {}
+}
+
+// ============================================================
+// Manual add-address dialog (modal overlay)
+// ============================================================
+void App::RenderAddDialog() {
+    int w = m_ui.width, h = m_ui.height;
+    // Dim background
+    UI::FillRect(m_ui.g, {0, 0, w, h}, Gdiplus::Color(128, 0, 0, 0));
+
+    RECT dlg = {w/2 - 200, h/2 - 100, w/2 + 200, h/2 + 100};
+    UI::FillRect(m_ui.g, dlg, Theme::BG_PANEL());
+    UI::DrawNeonBorder(m_ui.g, dlg.left, dlg.top, dlg.right-dlg.left-1, dlg.bottom-dlg.top-1, Theme::NEON());
+
+    UI::DrawText(m_ui.g, dlg.left + 10, dlg.top + 8, "Add Address Manually", Theme::CLR_TEXT());
+
+    // Address field
+    UI::DrawText(m_ui.g, dlg.left + 10, dlg.top + 32, "Address:", Theme::CLR_TEXT());
+    if (m_addAddrBuf[0] == '\0' && m_ui.focusId != 6000) {
+        UI::DrawText(m_ui.g, dlg.left + 82, dlg.top + 33, "0x00400000 or module+offset", Theme::CLR_DIM());
+    }
+    UI::TextInput(m_ui, 6000, {dlg.left + 80, dlg.top + 30, dlg.right - 10, dlg.top + 52}, m_addAddrBuf, sizeof(m_addAddrBuf));
+
+    // Type field
+    UI::DrawText(m_ui.g, dlg.left + 10, dlg.top + 58, "Type:", Theme::CLR_TEXT());
+    const char* typeNames[] = {"Byte","2 Bytes","4 Bytes","8 Bytes","Float","Double","String","AOB"};
+    UI::ComboBox(m_ui, 6001, {dlg.left + 80, dlg.top + 56, dlg.left + 180, dlg.top + 78}, typeNames, 8, &m_addTypeIdx);
+
+    // Description field
+    UI::DrawText(m_ui.g, dlg.left + 10, dlg.top + 84, "Desc:", Theme::CLR_TEXT());
+    UI::TextInput(m_ui, 6002, {dlg.left + 80, dlg.top + 82, dlg.right - 10, dlg.top + 104}, m_addDescBuf, sizeof(m_addDescBuf));
+
+    // OK button
+    if (UI::Button(m_ui, 6003, {dlg.right - 180, dlg.top + 120, dlg.right - 100, dlg.top + 142}, "OK")) {
+        uintptr_t addr = 0;
+        std::string addrStr = m_addAddrBuf;
+        // Check for module+offset
+        size_t plusPos = addrStr.find('+');
+        if (plusPos != std::string::npos) {
+            std::string modName = addrStr.substr(0, plusPos);
+            std::string offsetStr = addrStr.substr(plusPos + 1);
+            uintptr_t base = m_process.GetModuleBase(modName.c_str());
+            uintptr_t offset = strtoull(offsetStr.c_str(), nullptr, 0);
+            addr = base + offset;
+        } else {
+            addr = strtoull(addrStr.c_str(), nullptr, 16);
+        }
+        m_table.Add(addr, (ValueType)m_addTypeIdx, m_addDescBuf);
+        m_showAddDialog = false;
+        m_addAddrBuf[0] = '\0';
+        m_addDescBuf[0] = '\0';
+        m_ui.focusId = -1;
+    }
+    // Cancel button
+    if (UI::Button(m_ui, 6004, {dlg.right - 90, dlg.top + 120, dlg.right - 10, dlg.top + 142}, "Cancel")) {
+        m_showAddDialog = false;
+        m_ui.focusId = -1;
+    }
 }
 
 // ============================================================
@@ -1106,7 +1213,10 @@ void App::HandleHotkeys() {
         m_processList = m_process.EnumerateProcesses();
         m_showProcessPicker = true;
         break;
-    case 'S': m_table.Save("miku_table.mwt"); break;
+    case 'S': {
+        auto path = PickSaveFile("miku_table.mwt");
+        if (!path.empty()) m_table.Save(path.c_str());
+    } break;
     case 'M': ToggleMemoryViewer(); break;
     case 'G': ToggleMemoryViewer(); break;
     }

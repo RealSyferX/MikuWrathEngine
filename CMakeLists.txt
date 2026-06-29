@@ -46,4 +46,5 @@ target_link_libraries(MikuWrathEngine PRIVATE
     user32
     psapi
     capstone
+    Comdlg32
 )
