@@ -1,5 +1,6 @@
 #include "app.h"
 #include "memory_viewer.h"
+#include "value_utils.h"
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
@@ -612,18 +613,17 @@ void App::RenderAddressTable() {
     auto& entries = m_table.Entries();
     int visibleRows = (rc.bottom - yStart) / rowH;
     int maxScroll = std::max(0, (int)entries.size() - visibleRows);
-    m_table.m_scrollPos = std::min(m_table.m_scrollPos, maxScroll);
-    m_table.m_scrollPos = std::max(0, m_table.m_scrollPos);
+    m_table.ClampScroll(maxScroll);
 
     if (m_ui.PtInRect(rc) && m_ui.mouseWheel != 0) {
-        m_table.m_scrollPos -= m_ui.mouseWheel / 120 * 3;
-        m_table.m_scrollPos = std::max(0, std::min(m_table.m_scrollPos, maxScroll));
+        m_table.SetScrollPos(m_table.GetScrollPos() - m_ui.mouseWheel / 120 * 3);
+        m_table.ClampScroll(maxScroll);
     }
 
     const char* typeNames[] = {"Byte","2 Bytes","4 Bytes","8 Bytes","Float","Double","String","AOB"};
 
     for (int i = 0; i < visibleRows; i++) {
-        int idx = m_table.m_scrollPos + i;
+        int idx = m_table.GetScrollPos() + i;
         if (idx >= (int)entries.size()) break;
         int y = yStart + i * rowH;
         auto& e = entries[idx];
@@ -653,7 +653,7 @@ void App::RenderAddressTable() {
 
         // Value
         if (!e.isEditing && m_process.IsOpen()) {
-            std::string val = ReadValueString(m_process, e.address, e.type);
+            std::string val = ::ReadValueString(m_process, e.address, e.type);
             strncpy(e.editValue, val.c_str(), sizeof(e.editValue) - 1);
             e.editValue[sizeof(e.editValue) - 1] = '\0';
         }
@@ -663,7 +663,7 @@ void App::RenderAddressTable() {
         e.isEditing = (m_ui.focusId == 1003 + idx * 6);
         if (valChanged) {
             if (m_ui.keyPressed && m_ui.keyCode == VK_RETURN) {
-                WriteValueStr(e);
+                ::WriteValueString(m_process, e.address, e.type, e.editValue);
                 e.isEditing = false;
                 m_ui.focusId = -1;
             }
@@ -686,22 +686,6 @@ void App::RenderAddressTable() {
     if (entries.empty()) {
         UI::DrawText(m_ui.g, 8, yStart + 4, "No entries. Right-click scan results or double-click to add.", Theme::CLR_DIM());
     }
-}
-
-void App::WriteValueStr(AddressEntry& e) {
-    if (!m_process.IsOpen()) return;
-    try {
-        switch (e.type) {
-        case ValueType::Byte:    { uint8_t v = (uint8_t)std::stoul(e.editValue, nullptr, 0); m_process.Write(e.address, &v, 1); } break;
-        case ValueType::Word:    { uint16_t v = (uint16_t)std::stoul(e.editValue, nullptr, 0); m_process.Write(e.address, &v, 2); } break;
-        case ValueType::Dword:   { uint32_t v = (uint32_t)std::stoul(e.editValue, nullptr, 0); m_process.Write(e.address, &v, 4); } break;
-        case ValueType::Qword:   { uint64_t v = (uint64_t)std::stoull(e.editValue, nullptr, 0); m_process.Write(e.address, &v, 8); } break;
-        case ValueType::Float32: { float v = std::stof(e.editValue); m_process.Write(e.address, &v, 4); } break;
-        case ValueType::Float64: { double v = std::stod(e.editValue); m_process.Write(e.address, &v, 8); } break;
-        case ValueType::String:  { m_process.Write(e.address, e.editValue, strlen(e.editValue)+1); } break;
-        default: break;
-        }
-    } catch (...) {}
 }
 
 // ============================================================

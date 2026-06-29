@@ -1,4 +1,5 @@
 #include "scanner.h"
+#include "value_utils.h"
 #include <sstream>
 #include <cstring>
 #include <cmath>
@@ -586,52 +587,6 @@ void Scanner::StorePrevValues() {
 // ============================================================
 std::string Scanner::ReadValueString(uintptr_t addr) const {
     if (!m_pm || !m_pm->IsOpen()) return "??";
-
-    switch (m_valueType) {
-    case ValueType::Byte: {
-        uint8_t v; if (m_pm->Read(addr, &v, 1)) return std::to_string(v);
-        return "??";
-    }
-    case ValueType::Word: {
-        uint16_t v; if (m_pm->Read(addr, &v, 2)) return std::to_string(v);
-        return "??";
-    }
-    case ValueType::Dword: {
-        uint32_t v; if (m_pm->Read(addr, &v, 4)) return std::to_string(v);
-        return "??";
-    }
-    case ValueType::Qword: {
-        uint64_t v; if (m_pm->Read(addr, &v, 8)) return std::to_string((unsigned long long)v);
-        return "??";
-    }
-    case ValueType::Float32: {
-        float v; if (m_pm->Read(addr, &v, 4)) { char b[32]; snprintf(b, sizeof(b), "%g", v); return b; }
-        return "??";
-    }
-    case ValueType::Float64: {
-        double v; if (m_pm->Read(addr, &v, 8)) { char b[32]; snprintf(b, sizeof(b), "%g", v); return b; }
-        return "??";
-    }
-    case ValueType::String: {
-        char buf[64] = {};
-        if (m_pm->Read(addr, buf, 63)) return std::string(buf);
-        return "??";
-    }
-    case ValueType::AOB: {
-        size_t sz = m_aobPattern.bytes.size();
-        if (sz == 0 || sz > 64) return "??";
-        uint8_t buf[64];
-        if (m_pm->Read(addr, buf, sz)) {
-            std::string r;
-            char h[4];
-            for (size_t i = 0; i < sz; i++) {
-                snprintf(h, sizeof(h), "%02X ", buf[i]);
-                r += h;
-            }
-            return r;
-        }
-        return "??";
-    }
-    }
-    return "??";
+    size_t aobLen = (m_valueType == ValueType::AOB) ? m_aobPattern.bytes.size() : 8;
+    return ::ReadValueString(*m_pm, addr, m_valueType, aobLen);
 }

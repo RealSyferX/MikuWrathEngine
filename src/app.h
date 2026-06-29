@@ -118,7 +118,6 @@ private:
     void DoNewScan();
     void DoNextScan();
     void DoResetScan();
-    void WriteValueStr(AddressEntry& e);
 
     std::string PickSaveFile(const char* defaultName);
     std::string PickOpenFile();

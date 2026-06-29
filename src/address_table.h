@@ -1,7 +1,9 @@
 #pragma once
 #include "types.h"
 #include "process_manager.h"
+#include <algorithm>
 #include <vector>
+#include <string>
 
 class AddressTable {
 public:
@@ -23,14 +25,13 @@ public:
     int GetSelected() const { return m_selected; }
     void SetSelected(int idx) { m_selected = idx; }
 
-    int m_scrollPos = 0;
+    int GetScrollPos() const { return m_scrollPos; }
+    void SetScrollPos(int pos) { m_scrollPos = pos; }
+    void ClampScroll(int maxScroll) { m_scrollPos = std::max(0, std::min(m_scrollPos, maxScroll)); }
 
 private:
     std::vector<AddressEntry> m_entries;
     float m_freezeTimer = 0.0f;
     int m_selected = -1;
-
-    bool WriteValueString(const ProcessManager& pm, uintptr_t addr, ValueType type, const char* str) const;
+    int m_scrollPos = 0;
 };
-
-std::string ReadValueString(const ProcessManager& pm, uintptr_t addr, ValueType type);
