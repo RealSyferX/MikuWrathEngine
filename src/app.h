@@ -72,6 +72,17 @@ private:
     int m_regionScroll = 0;
     int m_moduleScroll = 0;
 
+    // Cached enumeration results (refreshed on a timer, not every frame)
+    std::vector<MemoryRegion> m_cachedRegions;
+    std::vector<ProcessManager::ModuleInfo> m_cachedModules;
+    float m_regionCacheTimer = 0.0f;
+    float m_moduleCacheTimer = 0.0f;
+
+    // Cached result value strings (batched reads instead of per-row RPM)
+    std::vector<std::string> m_cachedResultValues;
+    float m_resultValueTimer = 0.0f;
+    int m_cachedResultScroll = -1; // invalidate when scroll changes
+
     int m_menuOpen = -1;
 
     float m_dt = 0.0f;

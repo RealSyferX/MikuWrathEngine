@@ -227,8 +227,8 @@ void App::RenderMenuBar() {
                 case 102: m_table.Load("miku_table.mwt"); break;
                 case 103: PostQuitMessage(0); break;
                 case 201: ToggleMemoryViewer(); break;
-                case 202: m_showRegionList = true; break;
-                case 203: m_showModuleList = true; break;
+                case 202: m_showRegionList = true; m_cachedRegions.clear(); m_regionCacheTimer = 2.0f; break;
+                case 203: m_showModuleList = true; m_cachedModules.clear(); m_moduleCacheTimer = 2.0f; break;
                 }
             }
         }
@@ -276,6 +276,8 @@ void App::RenderProcessBar() {
     bx += btnW + 4;
     if (UI::Button(m_ui, 12, {bx, y, bx+btnW, y+btnH}, "Regions")) {
         m_showRegionList = true;
+        m_cachedRegions.clear();
+        m_regionCacheTimer = 2.0f; // force refresh
     }
     bx += btnW + 4;
     if (m_process.IsOpen()) {
@@ -283,6 +285,12 @@ void App::RenderProcessBar() {
             m_process.CloseTarget();
             m_scanner.Reset();
             m_results.clear();
+            m_cachedResultValues.clear();
+            m_cachedResultScroll = -1;
+            m_cachedRegions.clear();
+            m_cachedModules.clear();
+            m_regionCacheTimer = 2.0f;
+            m_moduleCacheTimer = 2.0f;
         }
     }
 }
@@ -434,6 +442,25 @@ void App::RenderResults() {
         m_resultsScroll = std::max(0, std::min(m_resultsScroll, maxScroll));
     }
 
+    // Cache result value strings (batched reads instead of per-row RPM).
+    // Refresh at most 4x/sec, or immediately when the scroll position changes
+    // so values stay mapped to the correct rows.
+    bool scrollChanged = (m_cachedResultScroll != m_resultsScroll);
+    m_cachedResultScroll = m_resultsScroll;
+    m_resultValueTimer += m_dt;
+    int visibleEnd = std::min(m_resultsScroll + visibleRows, (int)displayCount);
+    int expectedCount = std::max(0, visibleEnd - m_resultsScroll);
+    if (m_cachedResultValues.empty() || scrollChanged ||
+        (int)m_cachedResultValues.size() != expectedCount ||
+        m_resultValueTimer >= 0.25f) {
+        m_cachedResultValues.clear();
+        m_cachedResultValues.reserve(expectedCount);
+        for (int i = m_resultsScroll; i < visibleEnd; i++) {
+            m_cachedResultValues.push_back(m_scanner.ReadValueString(m_results[i]));
+        }
+        m_resultValueTimer = 0.0f;
+    }
+
     for (int i = 0; i < visibleRows; i++) {
         int idx = m_resultsScroll + i;
         if (idx >= (int)displayCount) break;
@@ -448,7 +475,14 @@ void App::RenderResults() {
         snprintf(addrStr, sizeof(addrStr), "0x%016llX", (unsigned long long)m_results[idx]);
         UI::DrawText(m_ui.g, rc.left + colAddr, y + 1, addrStr, Theme::CLR_BLUE());
 
-        std::string val = m_scanner.ReadValueString(m_results[idx]);
+        // Use cached value (bounds-checked in case visibleRows grew this frame)
+        std::string val;
+        int cacheIdx = idx - m_resultsScroll;
+        if (cacheIdx >= 0 && cacheIdx < (int)m_cachedResultValues.size()) {
+            val = m_cachedResultValues[cacheIdx];
+        } else {
+            val = m_scanner.ReadValueString(m_results[idx]);
+        }
         UI::DrawText(m_ui.g, rc.left + colVal, y + 1, val.c_str(), Theme::CLR_TEXT());
 
         RECT rowRc = {rc.left, y, rc.right, y + rowH};
@@ -676,6 +710,13 @@ void App::RenderProcessPicker() {
                 m_disasm.Init(m_process.Is64Bit());
                 m_scanner.Reset();
                 m_results.clear();
+                // Caches belong to the previous process; invalidate everything.
+                m_cachedResultValues.clear();
+                m_cachedResultScroll = -1;
+                m_cachedRegions.clear();
+                m_cachedModules.clear();
+                m_regionCacheTimer = 2.0f;
+                m_moduleCacheTimer = 2.0f;
                 m_showProcessPicker = false;
             }
         }
@@ -713,7 +754,13 @@ void App::RenderRegionList() {
         return;
     }
 
-    auto regions = m_process.EnumerateRegions(false);
+    // Cache region enumeration (refresh every 2s, not every frame)
+    m_regionCacheTimer += m_dt;
+    if (m_cachedRegions.empty() || m_regionCacheTimer >= 2.0f) {
+        m_cachedRegions = m_process.EnumerateRegions(false);
+        m_regionCacheTimer = 0.0f;
+    }
+    auto& regions = m_cachedRegions;
     int rowH = 18;
     int yStart = 35;
     int visibleRows = (h - yStart - 10) / rowH;
@@ -791,7 +838,13 @@ void App::RenderModuleList() {
         return;
     }
 
-    auto mods = m_process.EnumerateModules();
+    // Cache module enumeration (refresh every 2s, not every frame)
+    m_moduleCacheTimer += m_dt;
+    if (m_cachedModules.empty() || m_moduleCacheTimer >= 2.0f) {
+        m_cachedModules = m_process.EnumerateModules();
+        m_moduleCacheTimer = 0.0f;
+    }
+    auto& mods = m_cachedModules;
     int rowH = 18;
     int yStart = 35;
     int visibleRows = (h - yStart - 10) / rowH;
@@ -907,18 +960,24 @@ void App::DoNewScan() {
     m_scanner.NewScanAsync(CurrentType(), m_scanTypeIdx, m_valueBuf, m_valueBuf2, m_hexMode, m_writableOnly);
     m_selectedResult = -1;
     m_results.clear();
+    m_cachedResultValues.clear();
+    m_cachedResultScroll = -1;
 }
 
 void App::DoNextScan() {
     m_scanner.NextScanAsync(m_nextScanTypeIdx, m_valueBuf, m_valueBuf2, m_hexMode);
     m_selectedResult = -1;
     m_results.clear();
+    m_cachedResultValues.clear();
+    m_cachedResultScroll = -1;
 }
 
 void App::DoResetScan() {
     m_scanner.Reset();
     m_selectedResult = -1;
     m_results.clear();
+    m_cachedResultValues.clear();
+    m_cachedResultScroll = -1;
 }
 
 void App::ToggleMemoryViewer() {
