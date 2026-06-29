@@ -5,6 +5,7 @@
 #include "disassembler.h"
 #include "address_table.h"
 #include "ui.h"
+#include "settings.h"
 #include <vector>
 #include <memory>
 #include <functional>
@@ -58,6 +59,11 @@ private:
     bool m_hexMode = false;
     bool m_writableOnly = true;
 
+    // Scan region combo (0=All, 1+=module index into m_cachedModules)
+    int m_scanModuleIdx = 0;
+    const char* m_scanModuleItems[64] = {};
+    int m_scanModuleCount = 1;
+
     std::vector<uintptr_t> m_results;
     int m_resultsScroll = 0;
     int m_selectedResult = -1;
@@ -105,6 +111,10 @@ private:
     int m_addTypeIdx = 2; // 4 Bytes
     char m_addDescBuf[128] = {};
 
+    // Settings dialog
+    Settings m_settings;
+    bool m_showSettings = false;
+
     float m_dt = 0.0f;
     DWORD m_lastTick = 0;
     float m_updateTimer = 0.0f;
@@ -127,6 +137,7 @@ private:
     void RenderModuleList();
     void RenderProcessPicker();
     void RenderAddDialog();
+    void RenderSettings();
 
     void DoNewScan();
     void DoNextScan();

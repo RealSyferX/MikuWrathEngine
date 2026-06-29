@@ -34,6 +34,24 @@ void UI::CleanupFonts() {
     delete s_fontFamily; s_fontFamily = nullptr;
 }
 
+void UI::RecreateFonts(int size) {
+    delete g_font; g_font = nullptr;
+    delete g_fontBold; g_fontBold = nullptr;
+    delete g_fontSmall; g_fontSmall = nullptr;
+    // Reuse the existing font family if possible
+    if (!s_fontFamily) {
+        s_fontFamily = new Gdiplus::FontFamily(L"Consolas");
+        if (!s_fontFamily->IsAvailable()) {
+            delete s_fontFamily;
+            s_fontFamily = new Gdiplus::FontFamily(L"Courier New");
+        }
+    }
+    int smallSize = (size - 1 > 6) ? size - 1 : 6;
+    g_font = new Gdiplus::Font(s_fontFamily, (float)size, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+    g_fontBold = new Gdiplus::Font(s_fontFamily, (float)size, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+    g_fontSmall = new Gdiplus::Font(s_fontFamily, (float)smallSize, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+}
+
 // ============================================================
 // Primitive drawing
 // ============================================================
@@ -206,7 +224,7 @@ bool UI::Checkbox(UIContext& ctx, int id, const RECT& rc, const char* label, boo
 }
 
 // ============================================================
-// Text Input
+// Text Input — with selection support (Ctrl+A/C/V, Shift+arrows)
 // ============================================================
 bool UI::TextInput(UIContext& ctx, int id, const RECT& rc, char* buf, int bufSize) {
     if (!ctx.g) return false;
@@ -214,7 +232,7 @@ bool UI::TextInput(UIContext& ctx, int id, const RECT& rc, char* buf, int bufSiz
     bool focused = (ctx.focusId == id);
     bool changed = false;
 
-    // Click to focus
+    // Click to focus — clears any existing selection
     if (hovered && ctx.mousePressed) {
         ctx.focusId = id;
         ctx.caretPos = (int)strlen(buf);
@@ -222,19 +240,43 @@ bool UI::TextInput(UIContext& ctx, int id, const RECT& rc, char* buf, int bufSiz
         focused = true;
     }
 
+    // Clamp caret positions to valid range
+    int bufLen = (int)strlen(buf);
+    if (ctx.caretPos < 0) ctx.caretPos = 0;
+    if (ctx.caretPos > bufLen) ctx.caretPos = bufLen;
+    if (ctx.caretAnchor < 0) ctx.caretAnchor = 0;
+    if (ctx.caretAnchor > bufLen) ctx.caretAnchor = bufLen;
+
+    // Compute selection range (used for both rendering and input handling)
+    int selStart = std::min(ctx.caretPos, ctx.caretAnchor);
+    int selEnd = std::max(ctx.caretPos, ctx.caretAnchor);
+    bool hasSelection = (selStart != selEnd);
+
     // Background
     Gdiplus::Color bg = focused ? Theme::BG_PANEL() : Theme::BG_CONTROL();
     Gdiplus::Color border = focused ? Theme::ACCENT_LIGHT() : Theme::BORDER();
     FillRect(ctx.g, rc, bg);
     DrawRect(ctx.g, rc, border);
 
+    // Selection highlight (drawn before text so text sits on top)
+    if (focused && hasSelection) {
+        int w1 = 0, h1 = 0, w2 = 0, h2 = 0;
+        std::string beforeSel(buf, selStart);
+        std::string selText(buf + selStart, selEnd - selStart);
+        MeasureText(ctx.g, beforeSel.c_str(), nullptr, &w1, &h1);
+        MeasureText(ctx.g, selText.c_str(), nullptr, &w2, &h2);
+        RECT selRc = { rc.left + 4 + w1, rc.top, rc.left + 4 + w1 + w2, rc.bottom };
+        FillRect(ctx.g, selRc, Theme::ACCENT());
+    }
+
     // Text
     DrawText(ctx.g, rc.left + 4, rc.top + 3, buf, Theme::CLR_TEXT());
 
-    // Caret
+    // Caret (positioned at caretPos, not always at end)
     if (focused && ctx.caretBlink) {
-        int tw, th;
-        MeasureText(ctx.g, buf, nullptr, &tw, &th);
+        int tw = 0, th = 0;
+        std::string beforeCaret(buf, ctx.caretPos);
+        MeasureText(ctx.g, beforeCaret.c_str(), nullptr, &tw, &th);
         int caretX = rc.left + 4 + tw;
         Gdiplus::Pen pen(Theme::CLR_TEXT(), 1.0f);
         ctx.g->DrawLine(&pen, caretX, rc.top + 2, caretX, rc.bottom - 2);
@@ -244,11 +286,19 @@ bool UI::TextInput(UIContext& ctx, int id, const RECT& rc, char* buf, int bufSiz
     if (focused) {
         int len = (int)strlen(buf);
 
+        // Character input — replaces selection if present
         if (ctx.hasCharInput && ctx.charInput >= 32 && ctx.charInput < 127) {
+            if (hasSelection) {
+                memmove(buf + selStart, buf + selEnd, len - selEnd + 1);
+                ctx.caretPos = selStart;
+                ctx.caretAnchor = selStart;
+                len = (int)strlen(buf);
+            }
             if (len < bufSize - 1) {
                 memmove(buf + ctx.caretPos + 1, buf + ctx.caretPos, len - ctx.caretPos + 1);
                 buf[ctx.caretPos] = (char)ctx.charInput;
                 ctx.caretPos++;
+                ctx.caretAnchor = ctx.caretPos;
                 changed = true;
             }
         }
@@ -256,48 +306,76 @@ bool UI::TextInput(UIContext& ctx, int id, const RECT& rc, char* buf, int bufSiz
         if (ctx.keyPressed) {
             switch (ctx.keyCode) {
             case VK_BACK:
-                if (ctx.caretPos > 0) {
+                if (hasSelection) {
+                    memmove(buf + selStart, buf + selEnd, len - selEnd + 1);
+                    ctx.caretPos = selStart;
+                    ctx.caretAnchor = selStart;
+                    changed = true;
+                } else if (ctx.caretPos > 0) {
                     memmove(buf + ctx.caretPos - 1, buf + ctx.caretPos, len - ctx.caretPos + 1);
                     ctx.caretPos--;
+                    ctx.caretAnchor = ctx.caretPos;
                     changed = true;
                 }
                 break;
             case VK_DELETE:
-                if (ctx.caretPos < len) {
+                if (hasSelection) {
+                    memmove(buf + selStart, buf + selEnd, len - selEnd + 1);
+                    ctx.caretPos = selStart;
+                    ctx.caretAnchor = selStart;
+                    changed = true;
+                } else if (ctx.caretPos < len) {
                     memmove(buf + ctx.caretPos, buf + ctx.caretPos + 1, len - ctx.caretPos);
+                    ctx.caretAnchor = ctx.caretPos;
                     changed = true;
                 }
                 break;
             case VK_HOME:
                 ctx.caretPos = 0;
+                if (!ctx.keyShift) ctx.caretAnchor = ctx.caretPos;
                 break;
             case VK_END:
                 ctx.caretPos = len;
+                if (!ctx.keyShift) ctx.caretAnchor = ctx.caretPos;
                 break;
             case VK_LEFT:
                 if (ctx.caretPos > 0) ctx.caretPos--;
+                if (!ctx.keyShift) ctx.caretAnchor = ctx.caretPos;
                 break;
             case VK_RIGHT:
                 if (ctx.caretPos < len) ctx.caretPos++;
+                if (!ctx.keyShift) ctx.caretAnchor = ctx.caretPos;
                 break;
             case 'A':
                 if (ctx.keyCtrl) { ctx.caretPos = 0; ctx.caretAnchor = len; }
                 break;
             case 'C':
                 if (ctx.keyCtrl) {
-                    CopyToClipboard(ctx.hwnd, buf);
+                    if (hasSelection) {
+                        std::string sel(buf + selStart, selEnd - selStart);
+                        CopyToClipboard(ctx.hwnd, sel.c_str());
+                    } else {
+                        CopyToClipboard(ctx.hwnd, buf);
+                    }
                 }
                 break;
             case 'V':
                 if (ctx.keyCtrl) {
                     std::string clip = PasteFromClipboard(ctx.hwnd);
                     if (!clip.empty()) {
+                        if (hasSelection) {
+                            // Delete selection first
+                            memmove(buf + selStart, buf + selEnd, len - selEnd + 1);
+                            ctx.caretPos = selStart;
+                            len = (int)strlen(buf);
+                        }
                         int clipLen = (int)clip.size();
                         int remain = bufSize - 1 - len;
                         int toPaste = std::min(clipLen, remain);
                         memmove(buf + ctx.caretPos + toPaste, buf + ctx.caretPos, len - ctx.caretPos + 1);
                         memcpy(buf + ctx.caretPos, clip.c_str(), toPaste);
                         ctx.caretPos += toPaste;
+                        ctx.caretAnchor = ctx.caretPos;
                         changed = true;
                     }
                 }

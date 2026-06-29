@@ -131,6 +131,7 @@ bool Scrollbar(UIContext& ctx, int id, const RECT& rc, int thumbH, int total, in
 // Fonts
 void InitFonts();
 void CleanupFonts();
+void RecreateFonts(int size);
 extern Gdiplus::Font* g_font;
 extern Gdiplus::Font* g_fontBold;
 extern Gdiplus::Font* g_fontSmall;

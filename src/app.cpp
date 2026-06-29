@@ -22,6 +22,10 @@ bool App::Stristr(const std::string& haystack, const std::string& needle) {
 }
 
 App::App() {
+    m_settings.Load();
+    UI::RecreateFonts(m_settings.fontSize);
+    m_scanModuleItems[0] = "All";
+
     m_scanner.SetProcess(&m_process);
     m_memViewer = std::make_unique<MemoryViewer>();
     m_memViewer->SetProcess(&m_process);
@@ -109,6 +113,36 @@ void App::UpdateState() {
         m_cachedResultValues.clear();
     }
     m_wasScanning = isScanning;
+
+    // Auto-attach: poll for the target process every 2 seconds
+    static float autoAttachTimer = 0.0f;
+    if (!m_process.IsOpen() && m_settings.autoAttach[0]) {
+        autoAttachTimer += m_dt;
+        if (autoAttachTimer >= 2.0f) {
+            autoAttachTimer = 0.0f;
+            auto procs = m_process.EnumerateProcesses();
+            for (auto& p : procs) {
+                if (_stricmp(p.name.c_str(), m_settings.autoAttach) == 0) {
+                    if (m_process.OpenTarget(p.pid)) {
+                        m_disasm.Init(m_process.Is64Bit());
+                        m_scanner.Reset();
+                        m_scanner.SetScanRange(0, 0);
+                        m_scanModuleIdx = 0;
+                        m_cachedModules = m_process.EnumerateModules();
+                        m_cachedRegions.clear();
+                        m_cachedResultValues.clear();
+                        m_cachedResultScroll = -1;
+                        m_results.clear();
+                        m_regionCacheTimer = 2.0f;
+                        m_moduleCacheTimer = 0.0f;
+                    }
+                    break;
+                }
+            }
+        }
+    } else {
+        autoAttachTimer = 0.0f;
+    }
 }
 
 // ============================================================
@@ -146,6 +180,11 @@ void App::OnPaint(Gdiplus::Graphics* g) {
     // Manual add-address modal overlay
     if (m_showAddDialog) {
         RenderAddDialog();
+    }
+
+    // Settings modal overlay
+    if (m_showSettings) {
+        RenderSettings();
     }
 
     // Reset one-shot input flags
@@ -298,6 +337,8 @@ void App::RenderProcessBar() {
         if (UI::Button(m_ui, 13, {bx, y, bx+btnW, y+btnH}, "Close Proc")) {
             m_process.CloseTarget();
             m_scanner.Reset();
+            m_scanner.SetScanRange(0, 0);
+            m_scanModuleIdx = 0;
             m_results.clear();
             m_cachedResultValues.clear();
             m_cachedResultScroll = -1;
@@ -344,6 +385,28 @@ void App::RenderScanPanel() {
         cx += 55;
     }
     UI::Checkbox(m_ui, 22, {cx, y, cx+100, y+22}, "Writable", &m_writableOnly);
+    cx += 105;
+
+    // Region combo — restrict scan to a specific module (or All)
+    // Refresh module cache periodically so the combo stays current
+    m_moduleCacheTimer += m_dt;
+    if (m_cachedModules.empty() || m_moduleCacheTimer >= 2.0f) {
+        if (m_process.IsOpen()) {
+            m_cachedModules = m_process.EnumerateModules();
+        }
+        m_moduleCacheTimer = 0.0f;
+    }
+    // Rebuild the persistent const-char* array from cached module names
+    m_scanModuleItems[0] = "All";
+    m_scanModuleCount = 1;
+    for (size_t i = 0; i < m_cachedModules.size() && m_scanModuleCount < 64; i++) {
+        m_scanModuleItems[m_scanModuleCount++] = m_cachedModules[i].name.c_str();
+    }
+    if (m_scanModuleIdx >= m_scanModuleCount) m_scanModuleIdx = 0;
+
+    UI::DrawText(m_ui.g, cx, y+3, "Region:", Theme::CLR_TEXT());
+    UI::ComboBox(m_ui, 28, {cx + 50, y, cx + 200, y+22},
+                 m_scanModuleItems, m_scanModuleCount, &m_scanModuleIdx);
 
     // Value input(s)
     bool unknownInit = (isFirst && m_scanTypeIdx == 4);
@@ -709,6 +772,71 @@ void App::RenderAddDialog() {
 }
 
 // ============================================================
+// Settings dialog (modal overlay)
+// ============================================================
+void App::RenderSettings() {
+    int w = m_ui.width, h = m_ui.height;
+    // Dim background
+    UI::FillRect(m_ui.g, {0, 0, w, h}, Gdiplus::Color(128, 0, 0, 0));
+
+    RECT dlg = {w/2 - 200, h/2 - 120, w/2 + 200, h/2 + 120};
+    UI::FillRect(m_ui.g, dlg, Theme::BG_PANEL());
+    UI::DrawNeonBorder(m_ui.g, dlg.left, dlg.top, dlg.right-dlg.left-1, dlg.bottom-dlg.top-1, Theme::NEON());
+
+    UI::DrawText(m_ui.g, dlg.left + 10, dlg.top + 8, "Settings", Theme::CLR_TEXT());
+
+    // Auto-attach
+    UI::DrawText(m_ui.g, dlg.left + 10, dlg.top + 35, "Auto Attach:", Theme::CLR_TEXT());
+    if (m_settings.autoAttach[0] == '\0' && m_ui.focusId != 7000) {
+        UI::DrawText(m_ui.g, dlg.left + 100, dlg.top + 36, "e.g. MAT.exe (empty=off)", Theme::CLR_DIM());
+    }
+    UI::TextInput(m_ui, 7000, {dlg.left + 100, dlg.top + 33, dlg.right - 10, dlg.top + 55},
+                  m_settings.autoAttach, sizeof(m_settings.autoAttach));
+
+    // Font size
+    UI::DrawText(m_ui.g, dlg.left + 10, dlg.top + 62, "Font Size:", Theme::CLR_TEXT());
+    char sizeStr[8]; snprintf(sizeStr, sizeof(sizeStr), "%d", m_settings.fontSize);
+    UI::DrawText(m_ui.g, dlg.left + 100, dlg.top + 63, sizeStr, Theme::CLR_TEXT());
+
+    RECT minusBtn = {dlg.left + 130, dlg.top + 60, dlg.left + 150, dlg.top + 82};
+    if (UI::Button(m_ui, 7001, minusBtn, "-")) {
+        if (m_settings.fontSize > 6) {
+            m_settings.fontSize--;
+            UI::RecreateFonts(m_settings.fontSize);
+        }
+    }
+    RECT plusBtn = {dlg.left + 155, dlg.top + 60, dlg.left + 175, dlg.top + 82};
+    if (UI::Button(m_ui, 7002, plusBtn, "+")) {
+        if (m_settings.fontSize < 20) {
+            m_settings.fontSize++;
+            UI::RecreateFonts(m_settings.fontSize);
+        }
+    }
+
+    // Auto-attach status
+    if (m_process.IsOpen()) {
+        UI::DrawText(m_ui.g, dlg.left + 10, dlg.top + 90, "Status: Attached", Theme::CLR_GREEN());
+    } else if (m_settings.autoAttach[0]) {
+        UI::DrawText(m_ui.g, dlg.left + 10, dlg.top + 90, "Status: Will auto-attach on next launch", Theme::CLR_YELLOW());
+    } else {
+        UI::DrawText(m_ui.g, dlg.left + 10, dlg.top + 90, "Status: No auto-attach configured", Theme::CLR_DIM());
+    }
+
+    // Save & Close
+    RECT saveBtn = {dlg.right - 190, dlg.top + 115, dlg.right - 100, dlg.top + 137};
+    if (UI::Button(m_ui, 7003, saveBtn, "Save")) {
+        m_settings.Save();
+        m_showSettings = false;
+        m_ui.focusId = -1;
+    }
+    RECT closeBtn = {dlg.right - 90, dlg.top + 115, dlg.right - 10, dlg.top + 137};
+    if (UI::Button(m_ui, 7004, closeBtn, "Close")) {
+        m_showSettings = false;
+        m_ui.focusId = -1;
+    }
+}
+
+// ============================================================
 // Process picker overlay
 // ============================================================
 void App::RenderProcessPicker() {
@@ -779,6 +907,8 @@ void App::RenderProcessPicker() {
             if (m_process.OpenTarget(filtered[idx]->pid)) {
                 m_disasm.Init(m_process.Is64Bit());
                 m_scanner.Reset();
+                m_scanner.SetScanRange(0, 0);
+                m_scanModuleIdx = 0;
                 m_results.clear();
                 // Caches belong to the previous process; invalidate everything.
                 m_cachedResultValues.clear();
@@ -786,7 +916,7 @@ void App::RenderProcessPicker() {
                 m_cachedRegions.clear();
                 m_cachedModules.clear();
                 m_regionCacheTimer = 2.0f;
-                m_moduleCacheTimer = 2.0f;
+                m_moduleCacheTimer = 0.0f;
                 m_showProcessPicker = false;
             }
         }
@@ -1001,6 +1131,16 @@ void App::ShowTableContextMenu(int x, int y, size_t entryIdx) {
 // Actions
 // ============================================================
 void App::DoNewScan() {
+    // Set scan range based on selected module
+    if (m_scanModuleIdx > 0 && m_scanModuleIdx < m_scanModuleCount) {
+        int modIdx = m_scanModuleIdx - 1;
+        if (modIdx < (int)m_cachedModules.size()) {
+            m_scanner.SetScanRange(m_cachedModules[modIdx].base, m_cachedModules[modIdx].size);
+        }
+    } else {
+        m_scanner.SetScanRange(0, 0); // All regions
+    }
+
     m_scanner.NewScanAsync(CurrentType(), m_scanTypeIdx, m_valueBuf, m_valueBuf2, m_hexMode, m_writableOnly);
     m_selectedResult = -1;
     m_results.clear();
@@ -1073,6 +1213,8 @@ void App::ProcessPendingActions() {
             AppendMenuA(menu, MF_STRING, 201, "Memory Viewer\tCtrl+M");
             AppendMenuA(menu, MF_STRING, 202, "Memory Regions");
             AppendMenuA(menu, MF_STRING, 203, "Module List");
+            AppendMenuA(menu, MF_SEPARATOR, 0, nullptr);
+            AppendMenuA(menu, MF_STRING, 204, "Settings...");
         } else {
             AppendMenuA(menu, MF_STRING, 301, "About MikuWrathEngine");
             AppendMenuA(menu, MF_SEPARATOR, 0, nullptr);
@@ -1091,6 +1233,7 @@ void App::ProcessPendingActions() {
         case 201: m_pendingToggleMemViewer = true; break;
         case 202: m_showRegionList = true; m_cachedRegions.clear(); m_regionCacheTimer = 2.0f; break;
         case 203: m_showModuleList = true; m_cachedModules.clear(); m_moduleCacheTimer = 2.0f; break;
+        case 204: m_showSettings = true; break;
         }
         InvalidateRect(m_hwnd, nullptr, FALSE);
     }

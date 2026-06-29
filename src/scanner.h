@@ -12,6 +12,10 @@ public:
 
     void SetProcess(ProcessManager* pm) { m_pm = pm; }
 
+    // Restrict scanning to a memory range (e.g. a single module).
+    // base=0, size=0 means scan all regions.
+    void SetScanRange(uintptr_t base, size_t size) { m_scanBase = base; m_scanSize = size; }
+
     // scanType: 0=exact, 1=bigger, 2=smaller, 3=between, 4=unknown
     void NewScanAsync(ValueType type, int scanType,
                       const std::string& valueStr, const std::string& valueStr2,
@@ -70,6 +74,10 @@ private:
 
     BytePattern m_aobPattern;
     std::string m_searchString;
+
+    // Scan range restriction (0/0 = scan everything)
+    uintptr_t m_scanBase = 0;
+    size_t m_scanSize = 0;
 
     void NewScanWorker(ValueType type, int scanType,
                        std::string valueStr, std::string valueStr2,

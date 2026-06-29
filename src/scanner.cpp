@@ -191,6 +191,24 @@ void Scanner::NewScanWorker(ValueType type, int scanType,
     m_valueSize = vsz;
 
     auto regions = m_pm->EnumerateRegions(writableOnly);
+
+    // Filter to scan range if one is set (m_scanSize > 0)
+    if (m_scanSize > 0) {
+        std::vector<MemoryRegion> filtered;
+        uintptr_t scanEnd = m_scanBase + m_scanSize;
+        for (auto& r : regions) {
+            uintptr_t rEnd = r.base + r.size;
+            if (r.base >= m_scanBase && rEnd <= scanEnd) {
+                filtered.push_back(r);
+            } else if (r.base < m_scanBase && rEnd > m_scanBase) {
+                // Partial overlap — include the whole region; the offset
+                // loop will skip addresses outside the scan range.
+                filtered.push_back(r);
+            }
+        }
+        regions = std::move(filtered);
+    }
+
     size_t totalRegions = regions.size();
 
     if (unknownInit) {
@@ -275,6 +293,11 @@ void Scanner::NewScanWorker(ValueType type, int scanType,
 
             for (size_t off = 0; off < scanLen; off++) {
                 if (off % 4096 == 0 && !m_scanning.load(std::memory_order_relaxed)) goto scan_done;
+                // Skip offsets outside the restricted scan range
+                if (m_scanSize > 0) {
+                    uintptr_t addr = r.base + off;
+                    if (addr < m_scanBase || addr + vsz > m_scanBase + m_scanSize) continue;
+                }
                 bool match = false;
                 const uint8_t* ptr = data.data() + off;
 
@@ -371,6 +394,11 @@ bool Scanner::NextScanWorker(int nextScanType,
             size_t scanLen = (current.size() >= vsz) ? current.size() - vsz + 1 : 0;
             for (size_t off = 0; off < scanLen; off++) {
                 if (off % 4096 == 0 && !m_scanning.load(std::memory_order_relaxed)) goto snap_done;
+                // Skip offsets outside the restricted scan range
+                if (m_scanSize > 0) {
+                    uintptr_t addr = snap.base + off;
+                    if (addr < m_scanBase || addr + vsz > m_scanBase + m_scanSize) continue;
+                }
                 const uint8_t* cur = current.data() + off;
                 const uint8_t* prev = snap.data.data() + off;
                 bool match = false;
