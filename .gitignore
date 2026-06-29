@@ -51,6 +51,9 @@ build/_deps/
 # Address table saves
 *.mwt
 
+# HTML files (local only)
+*.html
+
 # OS files
 Thumbs.db
 ehthumbs.db
