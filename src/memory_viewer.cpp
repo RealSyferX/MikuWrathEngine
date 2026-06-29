@@ -168,6 +168,13 @@ LRESULT MemoryViewer::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
     case WM_ERASEBKGND:
         return 1; // prevent flicker
+    case WM_GETMINMAXINFO: {
+        // Prevent the memory viewer from being resized below a usable size.
+        LPMINMAXINFO mmi = (LPMINMAXINFO)lParam;
+        mmi->ptMinTrackSize.x = 400;
+        mmi->ptMinTrackSize.y = 300;
+        return 0;
+    }
     }
     return DefWindowProcW(m_hwnd, msg, wParam, lParam);
 }
@@ -357,7 +364,8 @@ void MemoryViewer::OnMouseDown(int x, int y, bool right, bool dbl) {
     if (right) {
         // Determine if click is in disasm or hex area
         RECT rc; GetClientRect(m_hwnd, &rc);
-        int halfH = (rc.bottom - 30 - 2) / 2;
+        int minPanelH = 40;
+        int halfH = std::max(minPanelH, (int)(rc.bottom - 30 - 2) / 2);
         int disasmTop = 30 + 2;
         int hexTop = disasmTop + halfH + 2;
 
@@ -380,7 +388,8 @@ void MemoryViewer::OnMouseDown(int x, int y, bool right, bool dbl) {
 
 void MemoryViewer::OnMouseWheel(int delta) {
     RECT rc; GetClientRect(m_hwnd, &rc);
-    int halfH = (rc.bottom - 30 - 2) / 2;
+    int minPanelH = 40;
+    int halfH = std::max(minPanelH, (int)(rc.bottom - 30 - 2) / 2);
     int disasmTop = 30 + 2;
     int hexTop = disasmTop + halfH + 2;
 
@@ -554,7 +563,9 @@ void MemoryViewer::OnPaint(Gdiplus::Graphics* g, int w, int h) {
 
     UI::DrawSeparator(g, 30, 2, w - 2);
 
-    int halfH = (h - 30 - 4) / 2;
+    // Ensure each panel has a minimum usable height even on short windows.
+    int minPanelH = 40;
+    int halfH = std::max(minPanelH, (h - 30 - 4) / 2);
     RECT disasmRc = { 2, 32, w - 2, 32 + halfH };
     RenderDisasm(g, disasmRc);
 
@@ -564,17 +575,23 @@ void MemoryViewer::OnPaint(Gdiplus::Graphics* g, int w, int h) {
     RenderHex(g, hexRc);
 
     if (m_showPatchPopup) {
-        RECT popupRc = { w/2 - 175, h/2 - 60, w/2 + 175, h/2 + 60 };
+        int ppW = std::min(350, std::max(280, w - 20));
+        int ppH = std::min(120, std::max(60, h - 20));
+        RECT popupRc = { w/2 - ppW/2, h/2 - ppH/2, w/2 + ppW/2, h/2 + ppH/2 };
         RenderPatchPopup(g, popupRc);
     }
 
     if (m_showSigMaker) {
-        RECT sigRc = { w/2 - 250, h/2 - 100, w/2 + 250, h/2 + 100 };
+        int smW = std::min(500, std::max(360, w - 20));
+        int smH = std::min(200, std::max(180, h - 20));
+        RECT sigRc = { w/2 - smW/2, h/2 - smH/2, w/2 + smW/2, h/2 + smH/2 };
         RenderSigMaker(g, sigRc);
     }
 
     if (m_showAsmPopup) {
-        RECT asmRc = { w/2 - 200, h/2 - 70, w/2 + 200, h/2 + 70 };
+        int apW = std::min(400, std::max(300, w - 20));
+        int apH = std::min(140, std::max(130, h - 20));
+        RECT asmRc = { w/2 - apW/2, h/2 - apH/2, w/2 + apW/2, h/2 + apH/2 };
         RenderAsmPopup(g, asmRc);
     }
 
@@ -592,6 +609,8 @@ void MemoryViewer::OnPaint(Gdiplus::Graphics* g, int w, int h) {
 void MemoryViewer::RenderAddrBar(Gdiplus::Graphics* g, RECT& rc) {
     UI::FillRect(g, rc, Theme::BG_TITLE());
 
+    int w = (int)(rc.right - rc.left);
+
     if (!m_pm || !m_pm->IsOpen()) {
         UI::DrawText(g, 8, 8, "No process selected", Theme::CLR_DIM());
         return;
@@ -599,7 +618,14 @@ void MemoryViewer::RenderAddrBar(Gdiplus::Graphics* g, RECT& rc) {
 
     UI::DrawText(g, 8, 8, "Address: 0x", Theme::CLR_TEXT());
 
-    RECT inputRc = { 80, 5, 280, 25 };
+    // Input field shrinks when the window is narrow so the buttons always
+    // remain visible to its right.  Minimum input width is 60px.
+    int inputLeft = 80;
+    int goBtnW = 35, syncHexW = 95, syncDisasmW = 105;
+    int btnGap = 5;
+    int buttonsTotalW = goBtnW + syncHexW + syncDisasmW + btnGap * 2;
+    int inputRight = std::max(inputLeft + 60, w - buttonsTotalW - 8);
+    RECT inputRc = { inputLeft, 5, inputRight, 25 };
     bool focused = m_addrBarFocus;
     bool dummyFocus = m_addrBarFocus;
 
@@ -613,15 +639,19 @@ void MemoryViewer::RenderAddrBar(Gdiplus::Graphics* g, RECT& rc) {
 
     UI::TextInput(m_ui, 1000, inputRc, m_addrBuf, sizeof(m_addrBuf));
 
-    RECT goBtn = { 285, 4, 320, 26 };
+    // Buttons flow immediately after the input field.
+    int bx = inputRight + btnGap;
+    RECT goBtn = { bx, 4, bx + goBtnW, 26 };
     if (UI::Button(m_ui, 1001, goBtn, "Go")) {
         ParseAndGo();
     }
-    RECT sync1 = { 325, 4, 420, 26 };
+    bx += goBtnW + btnGap;
+    RECT sync1 = { bx, 4, bx + syncHexW, 26 };
     if (UI::Button(m_ui, 1002, sync1, "Sync Hex")) {
         m_hexAddr = m_disasmAddr;
     }
-    RECT sync2 = { 425, 4, 530, 26 };
+    bx += syncHexW + btnGap;
+    RECT sync2 = { bx, 4, bx + syncDisasmW, 26 };
     if (UI::Button(m_ui, 1003, sync2, "Sync Disasm")) {
         m_disasmAddr = m_hexAddr;
         RefreshDisasm();
@@ -643,9 +673,11 @@ void MemoryViewer::RenderDisasm(Gdiplus::Graphics* g, RECT& rc) {
 
     int y = rc.top + 2;
     int lineH = 16;
+    // Only render as many instructions as fit in the available height.
+    int maxLines = std::max(1, (int)(rc.bottom - rc.top - 4) / lineH);
     char line[512];
 
-    for (size_t i = 0; i < m_disasmView.size() && y < rc.bottom; i++) {
+    for (size_t i = 0; i < m_disasmView.size() && (int)i < maxLines && y < rc.bottom; i++) {
         auto& inst = m_disasmView[i];
         // Module-relative address, padded to 30 chars + 2 spaces
         std::string addrStr = m_pm->FormatAddress(inst.address);
@@ -683,6 +715,12 @@ void MemoryViewer::RenderHex(Gdiplus::Graphics* g, RECT& rc) {
         return;
     }
 
+    // Dynamically size the number of hex lines to the available panel height
+    // so we never read or render more rows than fit on screen.
+    int lineH = 16;
+    int availH = (int)(rc.bottom - rc.top) - 4;
+    m_hexLines = std::max(1, availH / lineH);
+
     int totalBytes = m_hexLines * m_hexCols;
     std::vector<uint8_t> buf(totalBytes);
     bool ok = m_pm->Read(m_hexAddr, buf.data(), totalBytes);
@@ -700,7 +738,6 @@ void MemoryViewer::RenderHex(Gdiplus::Graphics* g, RECT& rc) {
     int refW = 0, refH = 0;
     UI::MeasureText(g, "00000000000000000000000000000000", nullptr, &refW, &refH); // 32 chars
     int charW = (refW > 0) ? (refW + 16) / 32 : 6; // round, fallback to 6px
-    int lineH = 16;
 
     // Layout: "ADDR  " (32 chars = 30 padded address + 2 spaces) | hex bytes ("XX " = 3 chars each) | " |" (2 chars) | ASCII (1 char each) | "|"
     int textX = rc.left + 2;

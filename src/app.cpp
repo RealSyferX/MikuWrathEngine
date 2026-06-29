@@ -79,12 +79,24 @@ void App::ComputeLayout(int w, int h) {
     m_layout.titleBar = { 0, y, w, y + Theme::TITLE_H }; y += Theme::TITLE_H;
     m_layout.menuBar = { 0, y, w, y + Theme::MENU_H }; y += Theme::MENU_H;
     m_layout.processBar = { 0, y, w, y + 28 }; y += 28;
-    m_layout.scanPanel = { 0, y, w, y + 52 }; y += 52;
 
+    // Scan panel height is dynamic: when the window is narrow the Region
+    // combo wraps onto a third row, so the panel needs more vertical space.
+    int scanH = (w < 700) ? 80 : 52;
+    m_layout.scanPanel = { 0, y, w, y + scanH }; y += scanH;
+
+    // Remaining vertical space is split between results and the address
+    // table.  Enforce a minimum per-panel height so that short windows still
+    // show something usable; if there is not enough room the panels extend
+    // past the bottom edge rather than collapsing to zero.
     int remain = h - y;
+    int minPanel = 80;
+    if (remain < minPanel * 2) {
+        remain = std::max(minPanel * 2, remain);
+    }
     int resultsH = remain / 2;
     m_layout.resultsPanel = { 0, y, w, y + resultsH }; y += resultsH;
-    m_layout.tablePanel = { 0, y, w, h };
+    m_layout.tablePanel = { 0, y, w, std::max(y + minPanel, h) };
 }
 
 // ============================================================
@@ -316,7 +328,15 @@ void App::RenderProcessBar() {
     }
 
     int btnW = 90, btnH = 22;
-    int bx = rc.right - btnW * 4 - 8;
+    int btnCount = m_process.IsOpen() ? 4 : 3;
+    int totalBtnW = btnW * btnCount + 4 * (btnCount - 1);
+    // When the window is narrow, shrink the buttons so they always fit
+    // alongside the process info text (leave at least 200px on the left).
+    if (totalBtnW > rc.right - 200) {
+        btnW = std::max(56, (int)(rc.right - 200 - 4 * (btnCount - 1)) / btnCount);
+        totalBtnW = btnW * btnCount + 4 * (btnCount - 1);
+    }
+    int bx = rc.right - totalBtnW - 8;
 
     if (UI::Button(m_ui, 10, {bx, y, bx+btnW, y+btnH}, "Open Process")) {
         m_processList = m_process.EnumerateProcesses();
@@ -357,35 +377,62 @@ void App::RenderScanPanel() {
     auto& rc = m_layout.scanPanel;
     UI::FillRect(m_ui.g, rc, Theme::BG_MAIN());
 
-    int y = rc.top + 4;
+    int w = m_ui.width;
+    int y1 = rc.top + 4;    // row 1
+    int y2 = rc.top + 30;   // row 2
     bool canScan = m_process.IsOpen() && !m_scanner.IsScanning();
     bool isFirst = m_scanner.IsFirstScan();
 
-    // Type combo
+    // ---- Result count (always visible, right-aligned on row 1) ----
+    size_t count = m_scanner.GetResultCount();
+    char countStr[64];
+    if (m_scanner.IsScanning()) {
+        if (count > 100000)
+            snprintf(countStr, sizeof(countStr), "Scanning... Found: %zu (first 100000)", count);
+        else
+            snprintf(countStr, sizeof(countStr), "Scanning... Found: %zu", count);
+    } else if (count > 100000) {
+        snprintf(countStr, sizeof(countStr), "Found: %zu (first 100000)", count);
+    } else {
+        snprintf(countStr, sizeof(countStr), "Found: %zu", count);
+    }
+    int cw = 0;
+    UI::MeasureText(m_ui.g, countStr, nullptr, &cw, nullptr);
+    int countX = w - cw - 8;
+    if (countX < 8) countX = 8; // never go off the left edge
+    UI::DrawText(m_ui.g, countX, y1 + 3, countStr, Theme::CLR_YELLOW());
+    // Right boundary for row 1 controls (leave room for the result count)
+    int row1Right = countX - 8;
+
+    // ---- Row 1: Type, ScanType, Hex, Writable, Region ----
     const char* typeNames[] = {"Byte","2 Bytes","4 Bytes","8 Bytes","Float","Double","String","AOB"};
-    UI::DrawText(m_ui.g, 8, y+3, "Type:", Theme::CLR_TEXT());
-    UI::ComboBox(m_ui, 20, {48, y, 148, y+22}, typeNames, 8, &m_typeIdx);
+    UI::DrawText(m_ui.g, 8, y1+3, "Type:", Theme::CLR_TEXT());
+    UI::ComboBox(m_ui, 20, {48, y1, 148, y1+22}, typeNames, 8, &m_typeIdx);
 
     // Scan type combo
     if (isFirst) {
         const char* scanTypes[] = {"Exact Value","Bigger Than","Smaller Than","Between","Unknown Init"};
-        UI::DrawText(m_ui.g, 158, y+3, "Scan:", Theme::CLR_TEXT());
-        UI::ComboBox(m_ui, 200, {198, y, 318, y+22}, scanTypes, 5, &m_scanTypeIdx);
+        UI::DrawText(m_ui.g, 158, y1+3, "Scan:", Theme::CLR_TEXT());
+        UI::ComboBox(m_ui, 200, {198, y1, 318, y1+22}, scanTypes, 5, &m_scanTypeIdx);
     } else {
         const char* nextTypes[] = {"Exact Value","Bigger Than","Smaller Than","Between",
                                     "Changed","Unchanged","Increased","Decreased"};
-        UI::DrawText(m_ui.g, 158, y+3, "Next:", Theme::CLR_TEXT());
-        UI::ComboBox(m_ui, 201, {198, y, 318, y+22}, nextTypes, 8, &m_nextScanTypeIdx);
+        UI::DrawText(m_ui.g, 158, y1+3, "Next:", Theme::CLR_TEXT());
+        UI::ComboBox(m_ui, 201, {198, y1, 318, y1+22}, nextTypes, 8, &m_nextScanTypeIdx);
     }
 
     // Hex + Writable checkboxes
     int cx = 328;
     if (CurrentType() <= ValueType::Qword) {
-        UI::Checkbox(m_ui, 21, {cx, y, cx+50, y+22}, "Hex", &m_hexMode);
-        cx += 55;
+        if (cx + 50 < row1Right) {
+            UI::Checkbox(m_ui, 21, {cx, y1, cx+50, y1+22}, "Hex", &m_hexMode);
+            cx += 55;
+        }
     }
-    UI::Checkbox(m_ui, 22, {cx, y, cx+100, y+22}, "Writable", &m_writableOnly);
-    cx += 105;
+    if (cx + 100 < row1Right) {
+        UI::Checkbox(m_ui, 22, {cx, y1, cx+100, y1+22}, "Writable", &m_writableOnly);
+        cx += 105;
+    }
 
     // Region combo — restrict scan to a specific module (or All)
     // Refresh module cache periodically so the combo stays current
@@ -404,83 +451,101 @@ void App::RenderScanPanel() {
     }
     if (m_scanModuleIdx >= m_scanModuleCount) m_scanModuleIdx = 0;
 
-    UI::DrawText(m_ui.g, cx, y+3, "Region:", Theme::CLR_TEXT());
-    UI::ComboBox(m_ui, 28, {cx + 50, y, cx + 200, y+22},
-                 m_scanModuleItems, m_scanModuleCount, &m_scanModuleIdx);
+    bool regionOnRow3 = false;
+    if (cx + 200 < row1Right) {
+        // Region fits on row 1
+        UI::DrawText(m_ui.g, cx, y1+3, "Region:", Theme::CLR_TEXT());
+        UI::ComboBox(m_ui, 28, {cx + 50, y1, cx + 200, y1+22},
+                     m_scanModuleItems, m_scanModuleCount, &m_scanModuleIdx);
+    } else {
+        // Region wraps to row 3 (panel is 70px tall when w < 700)
+        regionOnRow3 = true;
+    }
 
-    // Value input(s)
+    // ---- Row 2: Value input, Scan/Stop button, Reset ----
     bool unknownInit = (isFirst && m_scanTypeIdx == 4);
     bool isBetween = (isFirst ? m_scanTypeIdx == 3 : m_nextScanTypeIdx == 3);
     bool needValue = !unknownInit && !(isFirst ? false : m_nextScanTypeIdx >= 4);
 
-    y += 26;
-    UI::DrawText(m_ui.g, 8, y+3, "Value:", Theme::CLR_TEXT());
+    UI::DrawText(m_ui.g, 8, y2+3, "Value:", Theme::CLR_TEXT());
+
+    // Scan button is always anchored to the right edge so it stays visible.
+    int scanBtnW = 100;
+    int scanBtnX = w - scanBtnW - 8;
+    // Reset button sits to the left of the scan button (next scans only)
+    int resetBtnW = 60;
+    int resetBtnX = scanBtnX - resetBtnW - 4;
+    // Value input right boundary must not overlap the buttons
+    int valRight = isFirst ? (scanBtnX - 8) : (resetBtnX - 8);
+    int valLeft = 48;
+    int valW = valRight - valLeft;
+    if (valW > 200) valW = 200; // cap at original width
+    if (valW < 60) valW = 60;   // minimum usable width
 
     if (!needValue) {
         // Draw disabled input
-        RECT inpRc = {48, y, 248, y+22};
+        RECT inpRc = {valLeft, y2, valLeft + valW, y2+22};
         UI::FillRect(m_ui.g, inpRc, Theme::BG_CONTROL());
         UI::DrawRect(m_ui.g, inpRc, Theme::BORDER());
     } else {
         const char* hint = (CurrentType() == ValueType::AOB) ? "e.g. 7F ?? 90 41" : nullptr;
         if (hint) {
-            // Draw hint text when empty
             if (m_valueBuf[0] == '\0') {
-                UI::DrawText(m_ui.g, 52, y+3, hint, Theme::CLR_DIM());
+                UI::DrawText(m_ui.g, valLeft + 4, y2+3, hint, Theme::CLR_DIM());
             }
         }
-        UI::TextInput(m_ui, 23, {48, y, 248, y+22}, m_valueBuf, sizeof(m_valueBuf));
+        UI::TextInput(m_ui, 23, {valLeft, y2, valLeft + valW, y2+22}, m_valueBuf, sizeof(m_valueBuf));
     }
 
     if (isBetween && needValue) {
-        UI::DrawText(m_ui.g, 258, y+3, "to", Theme::CLR_TEXT());
-        UI::TextInput(m_ui, 24, {278, y, 478, y+22}, m_valueBuf2, sizeof(m_valueBuf2));
+        int val2Left = valLeft + valW + 10;
+        int val2MaxW = resetBtnX - val2Left - 4;
+        int val2W = std::min(200, val2MaxW);
+        if (val2W < 40) val2W = 40; // minimum usable, may overlap when extremely narrow
+        UI::DrawText(m_ui.g, val2Left - 14, y2+3, "to", Theme::CLR_TEXT());
+        UI::TextInput(m_ui, 24, {val2Left, y2, val2Left + val2W, y2+22}, m_valueBuf2, sizeof(m_valueBuf2));
     }
 
-    // Scan buttons
-    int bx = 488;
+    // Scan / Stop / disabled button (right-anchored)
     if (m_scanner.IsScanning()) {
         // Stop button (red)
-        RECT btnRc = {bx, y, bx+100, y+22};
+        RECT btnRc = {scanBtnX, y2, scanBtnX+scanBtnW, y2+22};
         UI::FillRect(m_ui.g, btnRc, Gdiplus::Color(180, 30, 30));
         UI::DrawRect(m_ui.g, btnRc, Gdiplus::Color(220, 50, 50));
-        UI::DrawText(m_ui.g, bx+30, y+3, "Stop", Theme::CLR_TEXT());
+        UI::DrawText(m_ui.g, scanBtnX+30, y2+3, "Stop", Theme::CLR_TEXT());
         if (m_ui.PtInRect(btnRc) && m_ui.mousePressed) {
             m_scanner.RequestCancel();
         }
-        // Progress bar
-        RECT pbRc = {bx+110, y, bx+260, y+22};
-        UI::ProgressBar(m_ui, pbRc, m_scanner.GetProgress());
+        // Progress bar to the left of the stop button
+        int pbRight = scanBtnX - 8;
+        int pbLeft = valLeft + valW + 10;
+        if (pbLeft < pbRight) {
+            RECT pbRc = {pbLeft, y2, pbRight, y2+22};
+            UI::ProgressBar(m_ui, pbRc, m_scanner.GetProgress());
+        }
     } else if (!canScan) {
         // Draw disabled button
-        RECT btnRc = {bx, y, bx+100, y+22};
+        RECT btnRc = {scanBtnX, y2, scanBtnX+scanBtnW, y2+22};
         UI::FillRect(m_ui.g, btnRc, Theme::BG_CONTROL());
         UI::DrawRect(m_ui.g, btnRc, Theme::BORDER());
-        UI::DrawText(m_ui.g, bx+20, y+3, isFirst ? "First Scan" : "Next Scan", Theme::CLR_DIM());
+        UI::DrawText(m_ui.g, scanBtnX+20, y2+3, isFirst ? "First Scan" : "Next Scan", Theme::CLR_DIM());
     } else {
         if (isFirst) {
-            if (UI::Button(m_ui, 25, {bx, y, bx+100, y+22}, "First Scan")) DoNewScan();
+            if (UI::Button(m_ui, 25, {scanBtnX, y2, scanBtnX+scanBtnW, y2+22}, "First Scan")) DoNewScan();
         } else {
-            if (UI::Button(m_ui, 26, {bx, y, bx+100, y+22}, "Next Scan")) DoNextScan();
-            if (UI::Button(m_ui, 27, {bx+108, y, bx+168, y+22}, "Reset")) DoResetScan();
+            if (UI::Button(m_ui, 26, {scanBtnX, y2, scanBtnX+scanBtnW, y2+22}, "Next Scan")) DoNextScan();
+            if (UI::Button(m_ui, 27, {resetBtnX, y2, resetBtnX+resetBtnW, y2+22}, "Reset")) DoResetScan();
         }
     }
 
-    // Result count — GetResultCount() returns the live atomic count while
-    // scanning and m_results.size() otherwise, so it is always accurate.
-    size_t count = m_scanner.GetResultCount();
-    char countStr[64];
-    if (m_scanner.IsScanning()) {
-        if (count > 100000)
-            snprintf(countStr, sizeof(countStr), "Scanning... Found: %zu (first 100000)", count);
-        else
-            snprintf(countStr, sizeof(countStr), "Scanning... Found: %zu", count);
-    } else if (count > 100000) {
-        snprintf(countStr, sizeof(countStr), "Found: %zu (first 100000)", count);
-    } else {
-        snprintf(countStr, sizeof(countStr), "Found: %zu", count);
+    // ---- Row 3: Region combo (only when wrapped) ----
+    if (regionOnRow3) {
+        int y3 = rc.top + 56;
+        UI::DrawText(m_ui.g, 8, y3+3, "Region:", Theme::CLR_TEXT());
+        int regW = std::min(200, w - 58 - 8);
+        UI::ComboBox(m_ui, 28, {58, y3, 58 + regW, y3+22},
+                     m_scanModuleItems, m_scanModuleCount, &m_scanModuleIdx);
     }
-    UI::DrawText(m_ui.g, bx+340, y+3, countStr, Theme::CLR_YELLOW());
 }
 
 // ============================================================
@@ -509,8 +574,9 @@ void App::RenderResults() {
         return;
     }
 
-    // Column headers
-    int colAddr = 4, colVal = 180;
+    // Column headers — value column position is proportional to panel width
+    int colAddr = 4;
+    int colVal = std::min(180, std::max(80, (int)(rc.right - rc.left) / 3));
     UI::FillRect(m_ui.g, {rc.left, rc.top, rc.right, rc.top + 18}, Theme::BG_CONTROL());
     UI::DrawText(m_ui.g, rc.left + colAddr, rc.top + 2, "Address", Theme::CLR_DIM());
     UI::DrawText(m_ui.g, rc.left + colVal, rc.top + 2, "Value", Theme::CLR_DIM());
@@ -622,9 +688,18 @@ void App::RenderAddressTable() {
 
     UI::DrawSeparator(m_ui.g, ty + 22, rc.left, rc.right);
 
-    // Column headers
+    // Column headers — widths are proportional to panel width so columns
+    // never overflow.  The remove ("X") button is anchored to the right edge
+    // and is therefore always visible.
     int hy = ty + 24;
-    int colFz = 4, colDesc = 34, colAddr = 200, colType = 340, colVal = 410, colX = rc.right - 24;
+    int colFz = 4;
+    int colX = (int)rc.right - 24;
+    int availW = colX - (int)rc.left;
+    int colDesc = 24;
+    int colAddr = std::max(colDesc + 60, availW / 4);
+    int colType = std::max(colAddr + 50, availW / 2);
+    int colVal = std::max(colType + 40, availW * 3 / 4);
+    if (colVal > availW - 30) colVal = availW - 30; // keep value column usable
     UI::FillRect(m_ui.g, {rc.left, hy, rc.right, hy + 18}, Theme::BG_CONTROL());
     UI::DrawText(m_ui.g, rc.left + colFz, hy + 2, "Fz", Theme::CLR_DIM());
     UI::DrawText(m_ui.g, rc.left + colDesc, hy + 2, "Description", Theme::CLR_DIM());
@@ -721,7 +796,10 @@ void App::RenderAddDialog() {
     // Dim background
     UI::FillRect(m_ui.g, {0, 0, w, h}, Gdiplus::Color(128, 0, 0, 0));
 
-    RECT dlg = {w/2 - 200, h/2 - 100, w/2 + 200, h/2 + 100};
+    // Clamp dialog size to the window so it never goes off-screen.
+    int dlgW = std::min(400, std::max(300, w - 20));
+    int dlgH = std::min(200, std::max(160, h - 20));
+    RECT dlg = {w/2 - dlgW/2, h/2 - dlgH/2, w/2 + dlgW/2, h/2 + dlgH/2};
     UI::FillRect(m_ui.g, dlg, Theme::BG_PANEL());
     UI::DrawNeonBorder(m_ui.g, dlg.left, dlg.top, dlg.right-dlg.left-1, dlg.bottom-dlg.top-1, Theme::NEON());
 
@@ -743,8 +821,10 @@ void App::RenderAddDialog() {
     UI::DrawText(m_ui.g, dlg.left + 10, dlg.top + 84, "Desc:", Theme::CLR_TEXT());
     UI::TextInput(m_ui, 6002, {dlg.left + 80, dlg.top + 82, dlg.right - 10, dlg.top + 104}, m_addDescBuf, sizeof(m_addDescBuf));
 
-    // OK button
-    if (UI::Button(m_ui, 6003, {dlg.right - 180, dlg.top + 120, dlg.right - 100, dlg.top + 142}, "OK")) {
+    // OK / Cancel buttons — anchored to the dialog bottom so they stay
+    // visible even when the dialog height is clamped.
+    int btnY = dlg.bottom - 30;
+    if (UI::Button(m_ui, 6003, {dlg.right - 180, btnY, dlg.right - 100, btnY + 22}, "OK")) {
         uintptr_t addr = 0;
         std::string addrStr = m_addAddrBuf;
         // Check for module+offset
@@ -765,7 +845,7 @@ void App::RenderAddDialog() {
         m_ui.focusId = -1;
     }
     // Cancel button
-    if (UI::Button(m_ui, 6004, {dlg.right - 90, dlg.top + 120, dlg.right - 10, dlg.top + 142}, "Cancel")) {
+    if (UI::Button(m_ui, 6004, {dlg.right - 90, btnY, dlg.right - 10, btnY + 22}, "Cancel")) {
         m_showAddDialog = false;
         m_ui.focusId = -1;
     }
@@ -779,7 +859,10 @@ void App::RenderSettings() {
     // Dim background
     UI::FillRect(m_ui.g, {0, 0, w, h}, Gdiplus::Color(128, 0, 0, 0));
 
-    RECT dlg = {w/2 - 200, h/2 - 120, w/2 + 200, h/2 + 120};
+    // Clamp dialog size to the window so it never goes off-screen.
+    int dlgW = std::min(400, std::max(300, w - 20));
+    int dlgH = std::min(240, std::max(170, h - 20));
+    RECT dlg = {w/2 - dlgW/2, h/2 - dlgH/2, w/2 + dlgW/2, h/2 + dlgH/2};
     UI::FillRect(m_ui.g, dlg, Theme::BG_PANEL());
     UI::DrawNeonBorder(m_ui.g, dlg.left, dlg.top, dlg.right-dlg.left-1, dlg.bottom-dlg.top-1, Theme::NEON());
 
@@ -822,14 +905,16 @@ void App::RenderSettings() {
         UI::DrawText(m_ui.g, dlg.left + 10, dlg.top + 90, "Status: No auto-attach configured", Theme::CLR_DIM());
     }
 
-    // Save & Close
-    RECT saveBtn = {dlg.right - 190, dlg.top + 115, dlg.right - 100, dlg.top + 137};
+    // Save & Close — anchored to the dialog bottom so they stay visible
+    // even when the dialog height is clamped to a short window.
+    int btnY = dlg.bottom - 30;
+    RECT saveBtn = {dlg.right - 190, btnY, dlg.right - 100, btnY + 22};
     if (UI::Button(m_ui, 7003, saveBtn, "Save")) {
         m_settings.Save();
         m_showSettings = false;
         m_ui.focusId = -1;
     }
-    RECT closeBtn = {dlg.right - 90, dlg.top + 115, dlg.right - 10, dlg.top + 137};
+    RECT closeBtn = {dlg.right - 90, btnY, dlg.right - 10, btnY + 22};
     if (UI::Button(m_ui, 7004, closeBtn, "Close")) {
         m_showSettings = false;
         m_ui.focusId = -1;
