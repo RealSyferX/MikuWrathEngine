@@ -135,5 +135,6 @@ void RecreateFonts(int size);
 extern Gdiplus::Font* g_font;
 extern Gdiplus::Font* g_fontBold;
 extern Gdiplus::Font* g_fontSmall;
+extern int g_fontSize;
 
 } // namespace UI

@@ -75,14 +75,15 @@ std::string App::PickOpenFile() {
 // Layout
 // ============================================================
 void App::ComputeLayout(int w, int h) {
+    int fontAdj = std::max(0, UI::g_fontSize - 9) * 2;
     int y = 0;
-    m_layout.titleBar = { 0, y, w, y + Theme::TITLE_H }; y += Theme::TITLE_H;
-    m_layout.menuBar = { 0, y, w, y + Theme::MENU_H }; y += Theme::MENU_H;
-    m_layout.processBar = { 0, y, w, y + 28 }; y += 28;
+    m_layout.titleBar = { 0, y, w, y + Theme::TITLE_H + fontAdj }; y += Theme::TITLE_H + fontAdj;
+    m_layout.menuBar = { 0, y, w, y + Theme::MENU_H + fontAdj }; y += Theme::MENU_H + fontAdj;
+    m_layout.processBar = { 0, y, w, y + 28 + fontAdj * 2 }; y += 28 + fontAdj * 2;
 
     // Scan panel height is dynamic: when the window is narrow the Region
     // combo wraps onto a third row, so the panel needs more vertical space.
-    int scanH = (w < 700) ? 80 : 52;
+    int scanH = (w < 700 ? 80 : 52) + fontAdj * 4;
     m_layout.scanPanel = { 0, y, w, y + scanH }; y += scanH;
 
     // Remaining vertical space is split between results and the address
@@ -90,10 +91,8 @@ void App::ComputeLayout(int w, int h) {
     // show something usable; if there is not enough room the panels extend
     // past the bottom edge rather than collapsing to zero.
     int remain = h - y;
-    int minPanel = 80;
-    if (remain < minPanel * 2) {
-        remain = std::max(minPanel * 2, remain);
-    }
+    int minPanel = 60;
+    if (remain < minPanel * 2) remain = minPanel * 2;
     int resultsH = remain / 2;
     m_layout.resultsPanel = { 0, y, w, y + resultsH }; y += resultsH;
     m_layout.tablePanel = { 0, y, w, std::max(y + minPanel, h) };
@@ -583,7 +582,7 @@ void App::RenderResults() {
     UI::DrawSeparator(m_ui.g, rc.top + 18, rc.left, rc.right);
 
     // Rows
-    int rowH = 16;
+    int rowH = std::max(16, UI::g_fontSize + 7);
     int yStart = rc.top + 20;
     int visibleRows = std::max<int>(0, (rc.bottom - yStart) / rowH);
 
@@ -708,7 +707,7 @@ void App::RenderAddressTable() {
     UI::DrawText(m_ui.g, rc.left + colVal, hy + 2, "Value", Theme::CLR_DIM());
 
     // Rows
-    int rowH = 20;
+    int rowH = std::max(20, UI::g_fontSize + 8);
     int yStart = hy + 20;
     auto& entries = m_table.Entries();
     int visibleRows = std::max<int>(0, (rc.bottom - yStart) / rowH);
@@ -954,7 +953,7 @@ void App::RenderProcessPicker() {
     }
 
     // List
-    int rowH = 18;
+    int rowH = std::max(18, UI::g_fontSize + 7);
     int yStart = 60;
     int visibleRows = std::max<int>(0, (h - yStart - 30) / rowH);
     int maxScroll = std::max(0, (int)filtered.size() - visibleRows);
@@ -1044,7 +1043,7 @@ void App::RenderRegionList() {
         m_regionCacheTimer = 0.0f;
     }
     auto& regions = m_cachedRegions;
-    int rowH = 18;
+    int rowH = std::max(18, UI::g_fontSize + 7);
     int yStart = 35;
     int visibleRows = std::max<int>(0, (h - yStart - 10) / rowH);
 
@@ -1137,7 +1136,7 @@ void App::RenderModuleList() {
         m_moduleCacheTimer = 0.0f;
     }
     auto& mods = m_cachedModules;
-    int rowH = 18;
+    int rowH = std::max(18, UI::g_fontSize + 7);
     int yStart = 35;
     int visibleRows = std::max<int>(0, (h - yStart - 10) / rowH);
 

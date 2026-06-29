@@ -13,6 +13,7 @@
 Gdiplus::Font* UI::g_font = nullptr;
 Gdiplus::Font* UI::g_fontBold = nullptr;
 Gdiplus::Font* UI::g_fontSmall = nullptr;
+int UI::g_fontSize = 9;
 
 static Gdiplus::FontFamily* s_fontFamily = nullptr;
 
@@ -35,6 +36,7 @@ void UI::CleanupFonts() {
 }
 
 void UI::RecreateFonts(int size) {
+    g_fontSize = size;
     delete g_font; g_font = nullptr;
     delete g_fontBold; g_fontBold = nullptr;
     delete g_fontSmall; g_fontSmall = nullptr;
@@ -258,6 +260,30 @@ bool UI::TextInput(UIContext& ctx, int id, const RECT& rc, char* buf, int bufSiz
     FillRect(ctx.g, rc, bg);
     DrawRect(ctx.g, rc, border);
 
+    // Clip to input rect so text doesn't overflow
+    Gdiplus::Rect clipRect(rc.left + 1, rc.top + 1, rc.right - rc.left - 2, rc.bottom - rc.top - 2);
+    Gdiplus::Region oldClip;
+    ctx.g->GetClip(&oldClip);
+    ctx.g->SetClip(clipRect);
+
+    // Calculate text offset to keep caret visible
+    int textX = rc.left + 4;
+    int fullW = 0, fullH = 0;
+    MeasureText(ctx.g, buf, nullptr, &fullW, &fullH);
+    int boxW = rc.right - rc.left - 8;
+    if (fullW > boxW) {
+        // Text is wider than box — calculate offset to show caret
+        int caretW = 0;
+        if (ctx.caretPos > 0) {
+            std::string beforeCaret(buf, ctx.caretPos);
+            MeasureText(ctx.g, beforeCaret.c_str(), nullptr, &caretW, &fullH);
+        }
+        // If caret is past the right edge, scroll left
+        if (caretW > boxW - 2) {
+            textX = rc.left + 4 - (caretW - boxW + 4);
+        }
+    }
+
     // Selection highlight (drawn before text so text sits on top)
     if (focused && hasSelection) {
         int w1 = 0, h1 = 0, w2 = 0, h2 = 0;
@@ -265,22 +291,30 @@ bool UI::TextInput(UIContext& ctx, int id, const RECT& rc, char* buf, int bufSiz
         std::string selText(buf + selStart, selEnd - selStart);
         MeasureText(ctx.g, beforeSel.c_str(), nullptr, &w1, &h1);
         MeasureText(ctx.g, selText.c_str(), nullptr, &w2, &h2);
-        RECT selRc = { rc.left + 4 + w1, rc.top, rc.left + 4 + w1 + w2, rc.bottom };
+        RECT selRc = { textX + w1, rc.top, textX + w1 + w2, rc.bottom };
         FillRect(ctx.g, selRc, Theme::ACCENT());
     }
 
-    // Text
-    DrawText(ctx.g, rc.left + 4, rc.top + 3, buf, Theme::CLR_TEXT());
+    // Draw text at adjusted position
+    DrawText(ctx.g, textX, rc.top + 3, buf, Theme::CLR_TEXT());
 
-    // Caret (positioned at caretPos, not always at end)
+    // Draw caret at adjusted position
     if (focused && ctx.caretBlink) {
-        int tw = 0, th = 0;
-        std::string beforeCaret(buf, ctx.caretPos);
-        MeasureText(ctx.g, beforeCaret.c_str(), nullptr, &tw, &th);
-        int caretX = rc.left + 4 + tw;
+        int beforeW = 0, th = 0;
+        if (ctx.caretPos > 0) {
+            std::string beforeCaret(buf, ctx.caretPos);
+            MeasureText(ctx.g, beforeCaret.c_str(), nullptr, &beforeW, &th);
+        }
+        int caretX = textX + beforeW;
+        // Clamp caret to visible area
+        if (caretX < rc.left + 2) caretX = rc.left + 2;
+        if (caretX > rc.right - 2) caretX = rc.right - 2;
         Gdiplus::Pen pen(Theme::CLR_TEXT(), 1.0f);
         ctx.g->DrawLine(&pen, caretX, rc.top + 2, caretX, rc.bottom - 2);
     }
+
+    // Restore clip
+    ctx.g->SetClip(&oldClip);
 
     // Handle input
     if (focused) {

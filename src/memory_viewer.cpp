@@ -371,13 +371,13 @@ void MemoryViewer::OnMouseDown(int x, int y, bool right, bool dbl) {
 
         if (y >= disasmTop && y < disasmTop + halfH) {
             // Disasm click - find instruction
-            int lineH = 16;
+            int lineH = std::max(16, UI::g_fontSize + 7);
             int idx = (y - disasmTop) / lineH;
             if (idx >= 0 && idx < (int)m_disasmView.size()) {
                 ShowContextMenu(x, y, m_disasmView[idx].address, true, m_disasmView[idx].size);
             }
         } else if (y >= hexTop) {
-            int lineH = 16;
+            int lineH = std::max(16, UI::g_fontSize + 7);
             int line = (y - hexTop) / lineH;
             uintptr_t addr = m_hexAddr + line * m_hexCols;
             ShowContextMenu(x, y, addr, false, 0);
@@ -672,7 +672,7 @@ void MemoryViewer::RenderDisasm(Gdiplus::Graphics* g, RECT& rc) {
     if (m_disasmView.empty()) RefreshDisasm();
 
     int y = rc.top + 2;
-    int lineH = 16;
+    int lineH = std::max(16, UI::g_fontSize + 7);
     // Only render as many instructions as fit in the available height.
     int maxLines = std::max(1, (int)(rc.bottom - rc.top - 4) / lineH);
     char line[512];
@@ -717,7 +717,7 @@ void MemoryViewer::RenderHex(Gdiplus::Graphics* g, RECT& rc) {
 
     // Dynamically size the number of hex lines to the available panel height
     // so we never read or render more rows than fit on screen.
-    int lineH = 16;
+    int lineH = std::max(16, UI::g_fontSize + 7);
     int availH = (int)(rc.bottom - rc.top) - 4;
     m_hexLines = std::max(1, availH / lineH);
 
