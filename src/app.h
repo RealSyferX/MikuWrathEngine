@@ -6,6 +6,7 @@
 #include "address_table.h"
 #include "ui.h"
 #include "settings.h"
+#include "debugger.h"
 #include <vector>
 #include <memory>
 #include <functional>
@@ -115,6 +116,17 @@ private:
     Settings m_settings;
     bool m_showSettings = false;
 
+    // Debugger
+    Debugger m_debugger;
+    bool m_showBreakpoints = false;
+    bool m_showAccessHits = false;
+    int m_accessHitsScroll = 0;
+    // Pending actions for debugger
+    bool m_pendingFindAccesses = false;
+    bool m_pendingFindWrites = false;
+    uintptr_t m_pendingFindAddr = 0;
+    ValueType m_pendingFindType = ValueType::Dword;
+
     float m_dt = 0.0f;
     DWORD m_lastTick = 0;
     float m_updateTimer = 0.0f;
@@ -138,6 +150,8 @@ private:
     void RenderProcessPicker();
     void RenderAddDialog();
     void RenderSettings();
+    void RenderBreakpoints();
+    void RenderAccessHits();
 
     void DoNewScan();
     void DoNextScan();

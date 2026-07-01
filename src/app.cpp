@@ -27,6 +27,7 @@ App::App() {
     m_scanModuleItems[0] = "All";
 
     m_scanner.SetProcess(&m_process);
+    m_debugger.SetProcessManager(&m_process);
     m_memViewer = std::make_unique<MemoryViewer>();
     m_memViewer->SetProcess(&m_process);
     m_memViewer->SetDisassembler(&m_disasm);
@@ -37,6 +38,7 @@ App::App() {
 }
 
 App::~App() {
+    m_debugger.Detach();
     m_process.CloseTarget();
 }
 
@@ -198,6 +200,14 @@ void App::OnPaint(Gdiplus::Graphics* g) {
         RenderSettings();
     }
 
+    // Debugger overlays
+    if (m_showBreakpoints) {
+        RenderBreakpoints();
+    }
+    if (m_showAccessHits) {
+        RenderAccessHits();
+    }
+
     // Reset one-shot input flags
     m_ui.mousePressed = false;
     m_ui.mouseReleased = false;
@@ -354,6 +364,7 @@ void App::RenderProcessBar() {
     bx += btnW + 4;
     if (m_process.IsOpen()) {
         if (UI::Button(m_ui, 13, {bx, y, bx+btnW, y+btnH}, "Close Proc")) {
+            m_debugger.Detach();
             m_process.CloseTarget();
             m_scanner.Reset();
             m_scanner.SetScanRange(0, 0);
@@ -860,7 +871,7 @@ void App::RenderSettings() {
 
     // Clamp dialog size to the window so it never goes off-screen.
     int dlgW = std::min(400, std::max(300, w - 20));
-    int dlgH = std::min(240, std::max(170, h - 20));
+    int dlgH = std::min(280, std::max(200, h - 20));
     RECT dlg = {w/2 - dlgW/2, h/2 - dlgH/2, w/2 + dlgW/2, h/2 + dlgH/2};
     UI::FillRect(m_ui.g, dlg, Theme::BG_PANEL());
     UI::DrawNeonBorder(m_ui.g, dlg.left, dlg.top, dlg.right-dlg.left-1, dlg.bottom-dlg.top-1, Theme::NEON());
@@ -895,13 +906,20 @@ void App::RenderSettings() {
         }
     }
 
+    // Debugger type
+    UI::DrawText(m_ui.g, dlg.left + 10, dlg.top + 88, "Debugger:", Theme::CLR_TEXT());
+    const char* dbgTypes[] = {"None", "VEH", "Windows"};
+    int dbgType = m_settings.debuggerType;
+    UI::ComboBox(m_ui, 7005, {dlg.left + 100, dlg.top + 86, dlg.left + 200, dlg.top + 108}, dbgTypes, 3, &dbgType);
+    m_settings.debuggerType = dbgType;
+
     // Auto-attach status
     if (m_process.IsOpen()) {
-        UI::DrawText(m_ui.g, dlg.left + 10, dlg.top + 90, "Status: Attached", Theme::CLR_GREEN());
+        UI::DrawText(m_ui.g, dlg.left + 10, dlg.top + 116, "Status: Attached", Theme::CLR_GREEN());
     } else if (m_settings.autoAttach[0]) {
-        UI::DrawText(m_ui.g, dlg.left + 10, dlg.top + 90, "Status: Will auto-attach on next launch", Theme::CLR_YELLOW());
+        UI::DrawText(m_ui.g, dlg.left + 10, dlg.top + 116, "Status: Will auto-attach on next launch", Theme::CLR_YELLOW());
     } else {
-        UI::DrawText(m_ui.g, dlg.left + 10, dlg.top + 90, "Status: No auto-attach configured", Theme::CLR_DIM());
+        UI::DrawText(m_ui.g, dlg.left + 10, dlg.top + 116, "Status: No auto-attach configured", Theme::CLR_DIM());
     }
 
     // Save & Close — anchored to the dialog bottom so they stay visible
@@ -918,6 +936,139 @@ void App::RenderSettings() {
         m_showSettings = false;
         m_ui.focusId = -1;
     }
+}
+
+// ============================================================
+// Breakpoints overlay
+// ============================================================
+void App::RenderBreakpoints() {
+    int w = m_ui.width, h = m_ui.height;
+    UI::FillRect(m_ui.g, {0, 0, w, h}, Theme::BG_MAIN());
+    UI::DrawNeonBorder(m_ui.g, 0, 0, w-1, h-1, Theme::NEON());
+
+    UI::FillRect(m_ui.g, {0, 0, w, 30}, Theme::BG_TITLE());
+    UI::DrawText(m_ui.g, 8, 7, "Breakpoints", Theme::CLR_TEXT());
+
+    if (UI::Button(m_ui, 8000, {w - 80, 3, w - 10, 27}, "Back")) {
+        m_showBreakpoints = false;
+    }
+
+    // Attach/Detach button
+    if (!m_debugger.IsAttached()) {
+        if (UI::Button(m_ui, 8001, {8, 35, 120, 57}, "Attach")) {
+            m_debugger.SetType((DebuggerType)m_settings.debuggerType);
+            m_debugger.Attach();
+        }
+    } else {
+        if (UI::Button(m_ui, 8002, {8, 35, 120, 57}, "Detach")) {
+            m_debugger.Detach();
+        }
+        UI::DrawText(m_ui.g, 130, 38, "Attached", Theme::CLR_GREEN());
+    }
+
+    UI::DrawSeparator(m_ui.g, 60, 2, w - 2);
+
+    // Breakpoint list
+    auto bps = m_debugger.GetBreakpoints();
+    int rowH = std::max(16, UI::g_fontSize + 7);
+    int y = 65;
+
+    // Headers
+    UI::FillRect(m_ui.g, {0, y, w, y + rowH}, Theme::BG_CONTROL());
+    UI::DrawText(m_ui.g, 8, y + 2, "Address", Theme::CLR_DIM());
+    UI::DrawText(m_ui.g, 180, y + 2, "Type", Theme::CLR_DIM());
+    UI::DrawText(m_ui.g, 260, y + 2, "Size", Theme::CLR_DIM());
+    UI::DrawText(m_ui.g, 320, y + 2, "HW/INT3", Theme::CLR_DIM());
+    UI::DrawText(m_ui.g, 400, y + 2, "Label", Theme::CLR_DIM());
+
+    y += rowH + 2;
+
+    for (size_t i = 0; i < bps.size(); i++) {
+        auto& bp = bps[i];
+        int ry = y + (int)i * rowH;
+        if (ry >= h - 20) break;
+
+        UI::FillRect(m_ui.g, {0, ry, w, ry + rowH}, i % 2 ? Theme::BG_MAIN() : Theme::BG_PANEL());
+
+        char buf[32];
+        snprintf(buf, sizeof(buf), "0x%016llX", (unsigned long long)bp.address);
+        UI::DrawText(m_ui.g, 8, ry + 1, buf, Theme::CLR_BLUE());
+
+        const char* typeStr = bp.type == BreakType::Execute ? "Execute" :
+                              bp.type == BreakType::Write ? "Write" : "Access";
+        UI::DrawText(m_ui.g, 180, ry + 1, typeStr, Theme::CLR_TEXT());
+
+        snprintf(buf, sizeof(buf), "%zu", bp.size);
+        UI::DrawText(m_ui.g, 260, ry + 1, buf, Theme::CLR_TEXT());
+
+        UI::DrawText(m_ui.g, 320, ry + 1, bp.hardware ? "HW" : "INT3", Theme::CLR_YELLOW());
+        UI::DrawText(m_ui.g, 400, ry + 1, bp.label, Theme::CLR_TEXT());
+    }
+
+    if (bps.empty()) {
+        UI::DrawText(m_ui.g, 8, y + 4, "No breakpoints set.", Theme::CLR_DIM());
+    }
+
+    // Clear all button
+    if (UI::Button(m_ui, 8003, {130, 35, 230, 57}, "Clear All")) {
+        m_debugger.ClearAllBreakpoints();
+    }
+}
+
+// ============================================================
+// Access hits overlay (Find what accesses/writes)
+// ============================================================
+void App::RenderAccessHits() {
+    int w = m_ui.width, h = m_ui.height;
+    UI::FillRect(m_ui.g, {0, 0, w, h}, Theme::BG_MAIN());
+    UI::DrawNeonBorder(m_ui.g, 0, 0, w-1, h-1, Theme::NEON());
+
+    UI::FillRect(m_ui.g, {0, 0, w, 30}, Theme::BG_TITLE());
+
+    const char* title = m_pendingFindAccesses ? "Find what accesses" : "Find what writes";
+    UI::DrawText(m_ui.g, 8, 7, title, Theme::CLR_TEXT());
+
+    if (UI::Button(m_ui, 8100, {w - 80, 3, w - 10, 27}, "Stop")) {
+        m_debugger.StopFind();
+        m_showAccessHits = false;
+    }
+
+    UI::DrawSeparator(m_ui.g, 30, 2, w - 2);
+
+    auto hits = m_debugger.GetAccessHits();
+    int rowH = std::max(16, UI::g_fontSize + 7);
+    int y = 35;
+
+    UI::FillRect(m_ui.g, {0, y, w, y + rowH}, Theme::BG_CONTROL());
+    UI::DrawText(m_ui.g, 8, y + 2, "Instruction", Theme::CLR_DIM());
+    UI::DrawText(m_ui.g, 200, y + 2, "Count", Theme::CLR_DIM());
+    UI::DrawText(m_ui.g, 280, y + 2, "Thread ID", Theme::CLR_DIM());
+    y += rowH + 2;
+
+    for (size_t i = 0; i < hits.size(); i++) {
+        int ry = y + (int)i * rowH;
+        if (ry >= h - 20) break;
+
+        UI::FillRect(m_ui.g, {0, ry, w, ry + rowH}, i % 2 ? Theme::BG_MAIN() : Theme::BG_PANEL());
+
+        char buf[32];
+        snprintf(buf, sizeof(buf), "0x%016llX", (unsigned long long)hits[i].instruction);
+        UI::DrawText(m_ui.g, 8, ry + 1, buf, Theme::CLR_BLUE());
+
+        snprintf(buf, sizeof(buf), "%d", hits[i].count);
+        UI::DrawText(m_ui.g, 200, ry + 1, buf, Theme::CLR_YELLOW());
+
+        snprintf(buf, sizeof(buf), "%lu", hits[i].threadId);
+        UI::DrawText(m_ui.g, 280, ry + 1, buf, Theme::CLR_TEXT());
+    }
+
+    if (hits.empty()) {
+        UI::DrawText(m_ui.g, 8, y + 4, "Waiting for hits...", Theme::CLR_DIM());
+    }
+
+    char info[64];
+    snprintf(info, sizeof(info), "Total: %zu hits", hits.size());
+    UI::DrawText(m_ui.g, 8, h - 18, info, Theme::CLR_DIM());
 }
 
 // ============================================================
@@ -1298,6 +1449,8 @@ void App::ProcessPendingActions() {
             AppendMenuA(menu, MF_STRING, 202, "Memory Regions");
             AppendMenuA(menu, MF_STRING, 203, "Module List");
             AppendMenuA(menu, MF_SEPARATOR, 0, nullptr);
+            AppendMenuA(menu, MF_STRING, 205, "Breakpoints");
+            AppendMenuA(menu, MF_SEPARATOR, 0, nullptr);
             AppendMenuA(menu, MF_STRING, 204, "Settings...");
         } else {
             AppendMenuA(menu, MF_STRING, 301, "About MikuWrathEngine");
@@ -1318,6 +1471,7 @@ void App::ProcessPendingActions() {
         case 202: m_showRegionList = true; m_cachedRegions.clear(); m_regionCacheTimer = 2.0f; break;
         case 203: m_showModuleList = true; m_cachedModules.clear(); m_moduleCacheTimer = 2.0f; break;
         case 204: m_showSettings = true; break;
+        case 205: m_showBreakpoints = true; break;
         }
         InvalidateRect(m_hwnd, nullptr, FALSE);
     }
@@ -1366,6 +1520,11 @@ void App::ProcessPendingActions() {
         AppendMenuA(menu, MF_STRING, 2, "Copy Address");
         AppendMenuA(menu, MF_STRING, 3, "Copy Value");
         AppendMenuA(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuA(menu, MF_STRING, 5, "Find what accesses this address");
+        AppendMenuA(menu, MF_STRING, 6, "Find what writes to this address");
+        AppendMenuA(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuA(menu, MF_STRING, 7, "Set Breakpoint (Execute)");
+        AppendMenuA(menu, MF_SEPARATOR, 0, nullptr);
         AppendMenuA(menu, MF_STRING, 4, "Delete Entry");
         POINT pt = {m_pendingCtxX, m_pendingCtxY};
         ClientToScreen(m_hwnd, &pt);
@@ -1377,6 +1536,34 @@ void App::ProcessPendingActions() {
             case 2: { char b[32]; snprintf(b,sizeof(b),"0x%llX",(unsigned long long)entries[idx].address); CopyToClipboard(m_hwnd, b); } break;
             case 3: CopyToClipboard(m_hwnd, entries[idx].editValue); break;
             case 4: m_table.Remove(idx); break;
+            case 5: { // Find accesses
+                uintptr_t addr = entries[idx].address;
+                size_t sz = ValueTypeSize(entries[idx].type);
+                if (sz == 0) sz = 4;
+                m_debugger.SetType((DebuggerType)m_settings.debuggerType);
+                if (m_debugger.StartFindAccesses(addr, sz)) {
+                    m_pendingFindAccesses = true;
+                    m_pendingFindWrites = false;
+                    m_showAccessHits = true;
+                }
+            } break;
+            case 6: { // Find writes
+                uintptr_t addr = entries[idx].address;
+                size_t sz = ValueTypeSize(entries[idx].type);
+                if (sz == 0) sz = 4;
+                m_debugger.SetType((DebuggerType)m_settings.debuggerType);
+                if (m_debugger.StartFindWrites(addr, sz)) {
+                    m_pendingFindAccesses = false;
+                    m_pendingFindWrites = true;
+                    m_showAccessHits = true;
+                }
+            } break;
+            case 7: { // Set breakpoint
+                m_debugger.SetType((DebuggerType)m_settings.debuggerType);
+                if (!m_debugger.IsAttached()) m_debugger.Attach();
+                m_debugger.AddBreakpoint(entries[idx].address, BreakType::Execute, 1, entries[idx].description);
+                m_showBreakpoints = true;
+            } break;
             }
         }
         InvalidateRect(m_hwnd, nullptr, FALSE);

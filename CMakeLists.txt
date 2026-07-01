@@ -32,6 +32,7 @@ add_executable(MikuWrathEngine WIN32
     src/disassembler.cpp
     src/memory_viewer.cpp
     src/address_table.cpp
+    src/debugger.cpp
 )
 
 target_include_directories(MikuWrathEngine PRIVATE
