@@ -92,27 +92,72 @@ bool Debugger::ClearHwBreakpointInContext(CONTEXT& ctx, int slot) {
 }
 
 void Debugger::ApplyHardwareBreakpointsToThread(DWORD threadId) {
-    HANDLE hThread = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT, FALSE, threadId);
+    HANDLE hThread = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_SUSPEND_RESUME, FALSE, threadId);
     if (!hThread) return;
+
+    DWORD suspendCount = SuspendThread(hThread);
+    if (suspendCount == (DWORD)-1) {
+        CloseHandle(hThread);
+        return;
+    }
 
     CONTEXT ctx = {};
     ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
     if (GetThreadContext(hThread, &ctx)) {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        for (auto& [id, bp] : m_breakpoints) {
-            if (bp.hardware && bp.enabled && bp.hwSlot >= 0) {
-                SetHwBreakpointInContext(ctx, bp.hwSlot, bp.address, bp.type, bp.size);
+        // Clear all slots first
+        for (int i = 0; i < 4; i++) {
+            ClearHwBreakpointInContext(ctx, i);
+        }
+        // Set active breakpoints
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            for (auto& [id, bp] : m_breakpoints) {
+                if (bp.hardware && bp.enabled && bp.hwSlot >= 0) {
+                    SetHwBreakpointInContext(ctx, bp.hwSlot, bp.address, bp.type, bp.size);
+                }
             }
         }
         SetThreadContext(hThread, &ctx);
     }
+
+    ResumeThread(hThread);
     CloseHandle(hThread);
 }
 
 void Debugger::ApplyHardwareBreakpointsToAll() {
     EnumerateThreads();
     for (DWORD tid : m_threadIds) {
-        ApplyHardwareBreakpointsToThread(tid);
+        HANDLE hThread = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_SUSPEND_RESUME, FALSE, tid);
+        if (!hThread) continue;
+
+        // Suspend the thread before modifying context
+        DWORD suspendCount = SuspendThread(hThread);
+        if (suspendCount == (DWORD)-1) {
+            CloseHandle(hThread);
+            continue;
+        }
+
+        CONTEXT ctx = {};
+        ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+        if (GetThreadContext(hThread, &ctx)) {
+            // Clear all hardware breakpoints
+            for (int i = 0; i < 4; i++) {
+                ClearHwBreakpointInContext(ctx, i);
+            }
+            // Set active breakpoints
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                for (auto& [id, bp] : m_breakpoints) {
+                    if (bp.hardware && bp.enabled && bp.hwSlot >= 0) {
+                        SetHwBreakpointInContext(ctx, bp.hwSlot, bp.address, bp.type, bp.size);
+                    }
+                }
+            }
+            SetThreadContext(hThread, &ctx);
+        }
+
+        ResumeThread(hThread);
+        CloseHandle(hThread);
     }
 }
 
@@ -130,9 +175,17 @@ bool Debugger::Attach() {
         DebugSetProcessKillOnExit(FALSE);
     }
 
+    m_readyEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+
     m_attached.store(true);
     m_running.store(true);
     m_thread = std::thread(&Debugger::DebugThread, this);
+
+    // Wait for debug thread to receive CREATE_PROCESS_DEBUG_EVENT
+    if (m_readyEvent) {
+        WaitForSingleObject(m_readyEvent, 5000);
+    }
+
     return true;
 }
 
@@ -175,6 +228,16 @@ void Debugger::Detach() {
     }
 
     m_attached.store(false);
+
+    if (m_readyEvent) {
+        CloseHandle(m_readyEvent);
+        m_readyEvent = nullptr;
+    }
+}
+
+bool Debugger::WaitForReady(int timeoutMs) {
+    if (!m_readyEvent) return false;
+    return WaitForSingleObject(m_readyEvent, timeoutMs) == WAIT_OBJECT_0;
 }
 
 int Debugger::AddBreakpoint(uintptr_t addr, BreakType type, size_t size, const char* label) {
@@ -206,7 +269,11 @@ int Debugger::AddBreakpoint(uintptr_t addr, BreakType type, size_t size, const c
         bp.hardware = true;
         bp.hwSlot = slot;
         m_hwSlotUsed[slot] = 1;
-        ApplyHardwareBreakpointsToAll();
+        if (m_attached.load()) {
+            m_hwBpDirty.store(true);
+        } else {
+            ApplyHardwareBreakpointsToAll();
+        }
     }
 
     int id = m_nextBpId++;
@@ -222,7 +289,11 @@ bool Debugger::RemoveBreakpoint(int id) {
     Breakpoint& bp = it->second;
     if (bp.hardware) {
         m_hwSlotUsed[bp.hwSlot] = 0;
-        ApplyHardwareBreakpointsToAll();
+        if (m_attached.load()) {
+            m_hwBpDirty.store(true);
+        } else {
+            ApplyHardwareBreakpointsToAll();
+        }
     } else {
         // Restore original byte
         if (bp.originalByte != 0xCC) {
@@ -245,7 +316,11 @@ bool Debugger::ClearAllBreakpoints() {
     }
     m_breakpoints.clear();
     memset(m_hwSlotUsed, 0, sizeof(m_hwSlotUsed));
-    ApplyHardwareBreakpointsToAll();
+    if (m_attached.load()) {
+        m_hwBpDirty.store(true);
+    } else {
+        ApplyHardwareBreakpointsToAll();
+    }
     return true;
 }
 
@@ -343,6 +418,11 @@ void Debugger::DebugThread() {
 
     while (m_running.load()) {
         if (!WaitForDebugEvent(&de, 100)) {
+            // Even when no event, check for dirty breakpoints
+            if (m_hwBpDirty.load()) {
+                m_hwBpDirty.store(false);
+                ApplyHardwareBreakpointsToAll();
+            }
             continue;
         }
 
@@ -353,26 +433,17 @@ void Debugger::DebugThread() {
             EXCEPTION_RECORD& er = de.u.Exception.ExceptionRecord;
 
             if (er.ExceptionCode == EXCEPTION_BREAKPOINT || er.ExceptionCode == EXCEPTION_SINGLE_STEP) {
-                // Get instruction pointer
                 uintptr_t ip = (uintptr_t)er.ExceptionAddress;
                 DWORD tid = de.dwThreadId;
 
                 if (m_finding.load()) {
-                    // This is a find-access/write hit
                     RecordAccessHit(tid, ip);
-                    // Just continue — hardware breakpoint auto-resets
                     continueStatus = DBG_CONTINUE;
                 } else {
-                    // Regular breakpoint hit
-                    // For INT3: the IP is at the breakpoint + 1 (after 0xCC)
-                    // We need to restore the original byte, single-step, then re-set
-                    // For hardware: the IP is at the instruction that triggered
-
-                    // For now, just continue
+                    // Regular breakpoint — just continue for now
                     continueStatus = DBG_CONTINUE;
                 }
             } else {
-                // Other exception — let the program handle it
                 continueStatus = DBG_EXCEPTION_NOT_HANDLED;
             }
             break;
@@ -398,10 +469,18 @@ void Debugger::DebugThread() {
             if (de.u.CreateProcessInfo.hFile) {
                 CloseHandle(de.u.CreateProcessInfo.hFile);
             }
+            // Signal that we're ready
+            if (m_readyEvent) SetEvent(m_readyEvent);
             break;
         case EXIT_PROCESS_DEBUG_EVENT:
             m_running.store(false);
             break;
+        }
+
+        // Check for dirty breakpoints (added/removed since last event)
+        if (m_hwBpDirty.load()) {
+            m_hwBpDirty.store(false);
+            ApplyHardwareBreakpointsToAll();
         }
 
         ContinueDebugEvent(de.dwProcessId, de.dwThreadId, continueStatus);

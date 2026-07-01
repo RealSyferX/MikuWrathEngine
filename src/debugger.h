@@ -52,6 +52,9 @@ public:
     bool IsAttached() const { return m_attached.load(); }
     bool IsRunning() const { return m_running.load(); }
 
+    // Wait for debug thread to be ready (after Attach)
+    bool WaitForReady(int timeoutMs = 5000);
+
     // Breakpoints
     int AddBreakpoint(uintptr_t addr, BreakType type = BreakType::Execute, size_t size = 1, const char* label = "");
     bool RemoveBreakpoint(int id);
@@ -73,6 +76,9 @@ private:
     std::atomic<bool> m_attached{false};
     std::atomic<bool> m_running{false};
     std::thread m_thread;
+
+    HANDLE m_readyEvent = nullptr;        // Signaled when debug thread is ready
+    std::atomic<bool> m_hwBpDirty{false}; // Flag: breakpoints need re-applying
 
     mutable std::mutex m_mutex;
 
