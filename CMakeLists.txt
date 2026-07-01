@@ -33,6 +33,7 @@ add_executable(MikuWrathEngine WIN32
     src/memory_viewer.cpp
     src/address_table.cpp
     src/debugger.cpp
+    src/access_hits_window.cpp
 )
 
 target_include_directories(MikuWrathEngine PRIVATE

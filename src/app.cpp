@@ -1,5 +1,6 @@
 #include "app.h"
 #include "memory_viewer.h"
+#include "access_hits_window.h"
 #include "value_utils.h"
 #include <cstdio>
 #include <cstring>
@@ -34,6 +35,10 @@ App::App() {
     m_memViewer->SetAddToTableCallback([this](uintptr_t addr, ValueType type) {
         m_table.Add(addr, type);
     });
+    m_accessHitsWindow = std::make_unique<AccessHitsWindow>();
+    m_accessHitsWindow->SetDebugger(&m_debugger);
+    m_accessHitsWindow->SetDisassembler(&m_disasm);
+    m_accessHitsWindow->SetProcessManager(&m_process);
     m_lastTick = GetTickCount();
 }
 
@@ -203,9 +208,6 @@ void App::OnPaint(Gdiplus::Graphics* g) {
     // Debugger overlays
     if (m_showBreakpoints) {
         RenderBreakpoints();
-    }
-    if (m_showAccessHits) {
-        RenderAccessHits();
     }
 
     // Reset one-shot input flags
@@ -1016,62 +1018,6 @@ void App::RenderBreakpoints() {
 }
 
 // ============================================================
-// Access hits overlay (Find what accesses/writes)
-// ============================================================
-void App::RenderAccessHits() {
-    int w = m_ui.width, h = m_ui.height;
-    UI::FillRect(m_ui.g, {0, 0, w, h}, Theme::BG_MAIN());
-    UI::DrawNeonBorder(m_ui.g, 0, 0, w-1, h-1, Theme::NEON());
-
-    UI::FillRect(m_ui.g, {0, 0, w, 30}, Theme::BG_TITLE());
-
-    const char* title = m_pendingFindAccesses ? "Find what accesses" : "Find what writes";
-    UI::DrawText(m_ui.g, 8, 7, title, Theme::CLR_TEXT());
-
-    if (UI::Button(m_ui, 8100, {w - 80, 3, w - 10, 27}, "Stop")) {
-        m_debugger.StopFind();
-        m_showAccessHits = false;
-    }
-
-    UI::DrawSeparator(m_ui.g, 30, 2, w - 2);
-
-    auto hits = m_debugger.GetAccessHits();
-    int rowH = std::max(16, UI::g_fontSize + 7);
-    int y = 35;
-
-    UI::FillRect(m_ui.g, {0, y, w, y + rowH}, Theme::BG_CONTROL());
-    UI::DrawText(m_ui.g, 8, y + 2, "Instruction", Theme::CLR_DIM());
-    UI::DrawText(m_ui.g, 200, y + 2, "Count", Theme::CLR_DIM());
-    UI::DrawText(m_ui.g, 280, y + 2, "Thread ID", Theme::CLR_DIM());
-    y += rowH + 2;
-
-    for (size_t i = 0; i < hits.size(); i++) {
-        int ry = y + (int)i * rowH;
-        if (ry >= h - 20) break;
-
-        UI::FillRect(m_ui.g, {0, ry, w, ry + rowH}, i % 2 ? Theme::BG_MAIN() : Theme::BG_PANEL());
-
-        char buf[32];
-        snprintf(buf, sizeof(buf), "0x%016llX", (unsigned long long)hits[i].instruction);
-        UI::DrawText(m_ui.g, 8, ry + 1, buf, Theme::CLR_BLUE());
-
-        snprintf(buf, sizeof(buf), "%d", hits[i].count);
-        UI::DrawText(m_ui.g, 200, ry + 1, buf, Theme::CLR_YELLOW());
-
-        snprintf(buf, sizeof(buf), "%lu", hits[i].threadId);
-        UI::DrawText(m_ui.g, 280, ry + 1, buf, Theme::CLR_TEXT());
-    }
-
-    if (hits.empty()) {
-        UI::DrawText(m_ui.g, 8, y + 4, "Waiting for hits...", Theme::CLR_DIM());
-    }
-
-    char info[64];
-    snprintf(info, sizeof(info), "Total: %zu hits", hits.size());
-    UI::DrawText(m_ui.g, 8, h - 18, info, Theme::CLR_DIM());
-}
-
-// ============================================================
 // Process picker overlay
 // ============================================================
 void App::RenderProcessPicker() {
@@ -1542,9 +1488,15 @@ void App::ProcessPendingActions() {
                 if (sz == 0) sz = 4;
                 m_debugger.SetType((DebuggerType)m_settings.debuggerType);
                 if (m_debugger.StartFindAccesses(addr, sz)) {
-                    m_pendingFindAccesses = true;
-                    m_pendingFindWrites = false;
-                    m_showAccessHits = true;
+                    if (!m_accessHitsWindow->IsCreated()) {
+                        m_accessHitsWindow->Create(m_hwnd, GetModuleHandleW(nullptr));
+                    }
+                    char title[64];
+                    snprintf(title, sizeof(title), "Find what accesses 0x%llX",
+                             (unsigned long long)addr);
+                    m_accessHitsWindow->SetTitle(title);
+                    m_accessHitsWindow->SetAccessType(true);
+                    m_accessHitsWindow->Show();
                 }
             } break;
             case 6: { // Find writes
@@ -1553,9 +1505,15 @@ void App::ProcessPendingActions() {
                 if (sz == 0) sz = 4;
                 m_debugger.SetType((DebuggerType)m_settings.debuggerType);
                 if (m_debugger.StartFindWrites(addr, sz)) {
-                    m_pendingFindAccesses = false;
-                    m_pendingFindWrites = true;
-                    m_showAccessHits = true;
+                    if (!m_accessHitsWindow->IsCreated()) {
+                        m_accessHitsWindow->Create(m_hwnd, GetModuleHandleW(nullptr));
+                    }
+                    char title[64];
+                    snprintf(title, sizeof(title), "Find what writes 0x%llX",
+                             (unsigned long long)addr);
+                    m_accessHitsWindow->SetTitle(title);
+                    m_accessHitsWindow->SetAccessType(false);
+                    m_accessHitsWindow->Show();
                 }
             } break;
             case 7: { // Set breakpoint
@@ -1608,6 +1566,12 @@ void App::ProcessPendingActions() {
     // Process memory viewer pending actions
     if (m_memViewer && m_memViewer->IsVisible()) {
         m_memViewer->ProcessPendingActions();
+    }
+
+    // Process access hits window pending actions
+    if (m_accessHitsWindow && m_accessHitsWindow->IsVisible()) {
+        m_accessHitsWindow->ProcessPendingActions();
+        InvalidateRect(m_accessHitsWindow->GetHwnd(), nullptr, FALSE);
     }
 }
 

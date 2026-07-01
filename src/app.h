@@ -7,6 +7,7 @@
 #include "ui.h"
 #include "settings.h"
 #include "debugger.h"
+#include "access_hits_window.h"
 #include <vector>
 #include <memory>
 #include <functional>
@@ -51,6 +52,7 @@ private:
     Disassembler m_disasm;
     AddressTable m_table;
     std::unique_ptr<MemoryViewer> m_memViewer;
+    std::unique_ptr<AccessHitsWindow> m_accessHitsWindow;
 
     int m_typeIdx = 2;
     int m_scanTypeIdx = 0;
@@ -119,8 +121,6 @@ private:
     // Debugger
     Debugger m_debugger;
     bool m_showBreakpoints = false;
-    bool m_showAccessHits = false;
-    int m_accessHitsScroll = 0;
     // Pending actions for debugger
     bool m_pendingFindAccesses = false;
     bool m_pendingFindWrites = false;
@@ -151,7 +151,6 @@ private:
     void RenderAddDialog();
     void RenderSettings();
     void RenderBreakpoints();
-    void RenderAccessHits();
 
     void DoNewScan();
     void DoNextScan();
