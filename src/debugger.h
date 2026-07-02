@@ -113,4 +113,5 @@ private:
     void EnumerateThreads();
     uintptr_t GetInstructionPointer(DWORD threadId);
     void RecordAccessHit(DWORD threadId, uintptr_t ip);
+    void SingleStepThread(DWORD tid);
 };

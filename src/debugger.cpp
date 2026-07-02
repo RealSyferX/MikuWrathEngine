@@ -366,6 +366,18 @@ void Debugger::RecordAccessHit(DWORD threadId, uintptr_t ip) {
     m_accessHits.push_back(hit);
 }
 
+void Debugger::SingleStepThread(DWORD tid) {
+    HANDLE hThread = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT, FALSE, tid);
+    if (!hThread) return;
+    CONTEXT ctx = {};
+    ctx.ContextFlags = CONTEXT_FULL;
+    if (GetThreadContext(hThread, &ctx)) {
+        ctx.EFlags |= 0x100; // Set trap flag
+        SetThreadContext(hThread, &ctx);
+    }
+    CloseHandle(hThread);
+}
+
 bool Debugger::StartFindAccesses(uintptr_t addr, size_t size) {
     if (m_finding.load()) StopFind();
     if (!m_attached.load()) {
@@ -431,16 +443,76 @@ void Debugger::DebugThread() {
         switch (de.dwDebugEventCode) {
         case EXCEPTION_DEBUG_EVENT: {
             EXCEPTION_RECORD& er = de.u.Exception.ExceptionRecord;
+            DWORD tid = de.dwThreadId;
 
-            if (er.ExceptionCode == EXCEPTION_BREAKPOINT || er.ExceptionCode == EXCEPTION_SINGLE_STEP) {
+            if (er.ExceptionCode == EXCEPTION_BREAKPOINT) {
+                // INT3 breakpoint hit.
+                // After 0xCC executes the CPU advances IP past it, so the
+                // breakpoint address is ExceptionAddress - 1.
                 uintptr_t ip = (uintptr_t)er.ExceptionAddress;
-                DWORD tid = de.dwThreadId;
+                uintptr_t bpAddr = ip - 1;
 
-                if (m_finding.load()) {
+                bool found = false;
+                {
+                    std::lock_guard<std::mutex> lock(m_mutex);
+                    for (auto& [id, bp] : m_breakpoints) {
+                        if (!bp.hardware && bp.enabled && bp.address == bpAddr) {
+                            // Restore the original byte so the single-step
+                            // does not immediately re-hit the 0xCC.
+                            m_pm->Write(bp.address, &bp.originalByte, 1);
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (found) {
+                        // Remember this thread needs 0xCC re-patched after
+                        // the single-step completes.
+                        m_singleStepping.insert(tid);
+                    }
+                }
+
+                if (found) {
+                    // Arm the trap flag so the next instruction raises
+                    // EXCEPTION_SINGLE_STEP, at which point we re-patch 0xCC.
+                    SingleStepThread(tid);
+                }
+                // Whether or not it was our breakpoint (the system attach
+                // breakpoint also arrives here), swallow it.
+                continueStatus = DBG_CONTINUE;
+            } else if (er.ExceptionCode == EXCEPTION_SINGLE_STEP) {
+                uintptr_t ip = (uintptr_t)er.ExceptionAddress;
+                bool wasStepping = false;
+
+                {
+                    std::lock_guard<std::mutex> lock(m_mutex);
+                    auto it = m_singleStepping.find(tid);
+                    if (it != m_singleStepping.end()) {
+                        // Completed the single-step over a restored INT3.
+                        m_singleStepping.erase(it);
+                        wasStepping = true;
+                        // Re-patch 0xCC for all enabled non-hardware
+                        // breakpoints. The one we stepped over is included;
+                        // the others already hold 0xCC so this is a no-op for
+                        // them. Breakpoints that were removed/disabled since
+                        // the hit are naturally skipped.
+                        uint8_t int3 = 0xCC;
+                        for (auto& [id, bp] : m_breakpoints) {
+                            if (!bp.hardware && bp.enabled) {
+                                m_pm->Write(bp.address, &int3, 1);
+                            }
+                        }
+                    }
+                }
+
+                if (wasStepping) {
+                    continueStatus = DBG_CONTINUE;
+                } else if (m_finding.load()) {
+                    // Hardware breakpoint hit while finding accesses/writes.
                     RecordAccessHit(tid, ip);
                     continueStatus = DBG_CONTINUE;
                 } else {
-                    // Regular breakpoint — just continue for now
+                    // Regular hardware breakpoint hit. Hardware breakpoints
+                    // auto-reset on continue, so just continue for now.
                     continueStatus = DBG_CONTINUE;
                 }
             } else {
