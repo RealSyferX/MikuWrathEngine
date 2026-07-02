@@ -397,6 +397,7 @@ void Debugger::CaptureContext(DWORD tid) {
     CONTEXT ctx = {};
     ctx.ContextFlags = CONTEXT_FULL;
     if (GetThreadContext(hThread, &ctx)) {
+        std::lock_guard<std::mutex> lock(m_mutex);
         m_lastContext.rax = ctx.Rax;
         m_lastContext.rbx = ctx.Rbx;
         m_lastContext.rcx = ctx.Rcx;
@@ -415,6 +416,7 @@ void Debugger::CaptureContext(DWORD tid) {
         m_lastContext.r15 = ctx.R15;
         m_lastContext.rip = ctx.Rip;
         m_lastContext.eflags = (uint32_t)ctx.EFlags;
+        m_haltedThreadId = tid;
     }
     CloseHandle(hThread);
 }
@@ -423,7 +425,12 @@ bool Debugger::StepInto() {
     if (!m_halted.load()) return false;
     // Set trap flag on halted thread so it executes exactly one
     // instruction before raising EXCEPTION_SINGLE_STEP again.
-    HANDLE hThread = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT, FALSE, m_haltedThreadId);
+    DWORD tid;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        tid = m_haltedThreadId;
+    }
+    HANDLE hThread = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT, FALSE, tid);
     if (hThread) {
         CONTEXT ctx = {};
         ctx.ContextFlags = CONTEXT_FULL;
@@ -452,6 +459,7 @@ bool Debugger::Continue() {
 }
 
 RegisterSnapshot Debugger::GetLastContext() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
     return m_lastContext;
 }
 
@@ -561,7 +569,6 @@ void Debugger::DebugThread() {
                 // halt and wait for the UI to Step/Continue.
                 if (found && !m_finding.load()) {
                     CaptureContext(tid);
-                    m_haltedThreadId = tid;
                     m_halted.store(true);
 
                     // Continue this event so the thread is no longer
@@ -608,7 +615,6 @@ void Debugger::DebugThread() {
                     if (m_stepRequested.load()) {
                         m_stepRequested.store(false);
                         CaptureContext(tid);
-                        m_haltedThreadId = tid;
                         m_halted.store(true);
 
                         ContinueDebugEvent(de.dwProcessId, de.dwThreadId, DBG_CONTINUE);
@@ -629,7 +635,6 @@ void Debugger::DebugThread() {
                     // for StepInto()/Continue() from the UI.
                     continueStatus = DBG_CONTINUE;
                     CaptureContext(tid);
-                    m_haltedThreadId = tid;
                     m_halted.store(true);
 
                     ContinueDebugEvent(de.dwProcessId, de.dwThreadId, continueStatus);
