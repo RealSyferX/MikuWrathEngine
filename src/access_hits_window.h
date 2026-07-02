@@ -5,6 +5,9 @@
 #include "debugger.h"
 #include "ui.h"
 #include <vector>
+#include <map>
+#include <functional>
+#include <string>
 
 class AccessHitsWindow {
 public:
@@ -23,6 +26,7 @@ public:
     void SetProcessManager(ProcessManager* pm) { m_pm = pm; }
     void SetTitle(const char* title);
     void SetAccessType(bool isAccess) { m_isAccess = isAccess; }
+    void SetGoToCallback(std::function<void(uintptr_t)> cb) { m_goToCallback = cb; }
 
     void ProcessPendingActions();
     LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam);
@@ -40,6 +44,11 @@ private:
     char m_title[64] = "Find what accesses";
 
     int m_scrollPos = 0;
+
+    // Cache of disassembled instruction text per instruction address.
+    // Cleared when the window is hidden so stale entries don't linger.
+    std::map<uintptr_t, std::string> m_disasmCache;
+    std::function<void(uintptr_t)> m_goToCallback;
 
     void OnPaint(Gdiplus::Graphics* g, int w, int h);
     void OnMouseWheel(int delta);

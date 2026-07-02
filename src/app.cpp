@@ -39,6 +39,9 @@ App::App() {
     m_accessHitsWindow->SetDebugger(&m_debugger);
     m_accessHitsWindow->SetDisassembler(&m_disasm);
     m_accessHitsWindow->SetProcessManager(&m_process);
+    m_accessHitsWindow->SetGoToCallback([this](uintptr_t addr) {
+        GoToAddress(addr);
+    });
     m_lastTick = GetTickCount();
 }
 
