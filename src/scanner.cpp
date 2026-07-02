@@ -198,11 +198,7 @@ void Scanner::NewScanWorker(ValueType type, int scanType,
         uintptr_t scanEnd = m_scanBase + m_scanSize;
         for (auto& r : regions) {
             uintptr_t rEnd = r.base + r.size;
-            if (r.base >= m_scanBase && rEnd <= scanEnd) {
-                filtered.push_back(r);
-            } else if (r.base < m_scanBase && rEnd > m_scanBase) {
-                // Partial overlap — include the whole region; the offset
-                // loop will skip addresses outside the scan range.
+            if (r.base < scanEnd && rEnd > m_scanBase) {
                 filtered.push_back(r);
             }
         }
