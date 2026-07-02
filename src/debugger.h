@@ -34,6 +34,7 @@ struct Breakpoint {
     bool hardware = false;    // true=hardware, false=INT3
     int hwSlot = -1;          // DR0-DR3 slot
     uint8_t originalByte = 0; // For INT3: original byte before 0xCC
+    bool bpActive = false;   // true after 0xCC has been written to target
     bool enabled = true;
     char label[128] = {};
 };

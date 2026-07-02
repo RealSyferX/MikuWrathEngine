@@ -216,7 +216,7 @@ void Debugger::Detach() {
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         for (auto& [id, bp] : m_breakpoints) {
-            if (!bp.hardware && bp.originalByte != 0xCC) {
+            if (!bp.hardware && bp.bpActive) {
                 m_pm->Write(bp.address, &bp.originalByte, 1);
             }
         }
@@ -260,7 +260,9 @@ int Debugger::AddBreakpoint(uintptr_t addr, BreakType type, size_t size, const c
         if (m_pm->Read(addr, &orig, 1)) {
             bp.originalByte = orig;
             uint8_t int3 = 0xCC;
-            m_pm->Write(addr, &int3, 1);
+            if (m_pm->Write(addr, &int3, 1)) {
+                bp.bpActive = true;
+            }
         }
     } else {
         // Hardware breakpoint
@@ -296,7 +298,7 @@ bool Debugger::RemoveBreakpoint(int id) {
         }
     } else {
         // Restore original byte
-        if (bp.originalByte != 0xCC) {
+        if (bp.bpActive) {
             m_pm->Write(bp.address, &bp.originalByte, 1);
         }
     }
@@ -310,7 +312,7 @@ bool Debugger::ClearAllBreakpoints() {
     for (auto& [id, bp] : m_breakpoints) {
         if (bp.hardware) {
             m_hwSlotUsed[bp.hwSlot] = 0;
-        } else if (bp.originalByte != 0xCC) {
+        } else if (bp.bpActive) {
             m_pm->Write(bp.address, &bp.originalByte, 1);
         }
     }
