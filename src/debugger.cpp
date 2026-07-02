@@ -434,6 +434,9 @@ bool Debugger::StepInto() {
         CloseHandle(hThread);
     }
     m_halted.store(false);
+    // Mark that a single-step halt is requested so the EXCEPTION_SINGLE_STEP
+    // handler knows to halt (rather than just re-arming INT3 and continuing).
+    m_stepRequested.store(true);
     // Signal debug thread to continue
     if (m_resumeEvent) SetEvent(m_resumeEvent);
     return true;
@@ -442,6 +445,8 @@ bool Debugger::StepInto() {
 bool Debugger::Continue() {
     if (!m_halted.load()) return false;
     m_halted.store(false);
+    // A plain continue must not trigger a single-step halt.
+    m_stepRequested.store(false);
     if (m_resumeEvent) SetEvent(m_resumeEvent);
     return true;
 }
@@ -598,6 +603,22 @@ void Debugger::DebugThread() {
                 }
 
                 if (wasStepping) {
+                    // INT3 re-arm dance just completed. If the user asked for
+                    // a StepInto, halt here instead of running away freely.
+                    if (m_stepRequested.load()) {
+                        m_stepRequested.store(false);
+                        CaptureContext(tid);
+                        m_haltedThreadId = tid;
+                        m_halted.store(true);
+
+                        ContinueDebugEvent(de.dwProcessId, de.dwThreadId, DBG_CONTINUE);
+
+                        if (m_resumeEvent) {
+                            WaitForSingleObject(m_resumeEvent, INFINITE);
+                            ResetEvent(m_resumeEvent);
+                        }
+                        continue; // Skip the end-of-loop ContinueDebugEvent
+                    }
                     continueStatus = DBG_CONTINUE;
                 } else if (m_finding.load()) {
                     // Hardware breakpoint hit while finding accesses/writes.

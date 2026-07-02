@@ -97,6 +97,7 @@ private:
     RegisterSnapshot m_lastContext;       // Last captured thread context (at halt)
     DWORD m_haltedThreadId = 0;           // Thread that triggered the halt
     std::atomic<bool> m_hwBpDirty{false}; // Flag: breakpoints need re-applying
+    std::atomic<bool> m_stepRequested{false}; // True when StepInto requested a single-step halt
 
     mutable std::mutex m_mutex;
 
