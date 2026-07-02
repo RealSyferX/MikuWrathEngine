@@ -14,7 +14,7 @@ public:
     void Clear();
 
     void UpdateFrozen(const ProcessManager& pm, float dt);
-    void UpdateValues(const ProcessManager& pm);
+    void UpdateValues(const ProcessManager& pm, int scrollPos, int visibleCount);
 
     void Save(const char* path) const;
     void Load(const char* path);

@@ -41,12 +41,14 @@ void AddressTable::UpdateFrozen(const ProcessManager& pm, float dt) {
     }
 }
 
-void AddressTable::UpdateValues(const ProcessManager& pm) {
-    for (auto& e : m_entries) {
-        if (!e.isEditing) {
-            std::string val = ::ReadValueString(pm, e.address, e.type);
-            strncpy(e.editValue, val.c_str(), sizeof(e.editValue) - 1);
-            e.editValue[sizeof(e.editValue) - 1] = '\0';
+void AddressTable::UpdateValues(const ProcessManager& pm, int scrollPos, int visibleCount) {
+    int start = std::max(0, scrollPos);
+    int end = std::min(scrollPos + visibleCount, (int)m_entries.size());
+    for (int i = start; i < end; i++) {
+        if (!m_entries[i].isEditing) {
+            std::string val = ::ReadValueString(pm, m_entries[i].address, m_entries[i].type);
+            strncpy(m_entries[i].editValue, val.c_str(), sizeof(m_entries[i].editValue) - 1);
+            m_entries[i].editValue[sizeof(m_entries[i].editValue) - 1] = '\0';
         }
     }
 }

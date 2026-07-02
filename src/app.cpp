@@ -120,7 +120,9 @@ void App::UpdateState() {
 
     m_updateTimer += m_dt;
     if (m_updateTimer >= 0.25f) {
-        m_table.UpdateValues(m_process);
+        int rowH = std::max(16, UI::g_fontSize + 8);
+        int visibleRows = std::max<int>(1, (m_layout.tablePanel.bottom - m_layout.tablePanel.top - 48) / rowH);
+        m_table.UpdateValues(m_process, m_table.GetScrollPos(), visibleRows);
         m_updateTimer = 0.0f;
     }
 
@@ -763,13 +765,7 @@ void App::RenderAddressTable() {
             e.type = (ValueType)ti;
         }
 
-        // Value
-        if (!e.isEditing && m_process.IsOpen()) {
-            std::string val = ::ReadValueString(m_process, e.address, e.type);
-            strncpy(e.editValue, val.c_str(), sizeof(e.editValue) - 1);
-            e.editValue[sizeof(e.editValue) - 1] = '\0';
-        }
-
+        // Value (display only — refreshed by UpdateValues() every 250ms)
         bool valChanged = UI::TextInput(m_ui, 1003 + idx * 6,
             {rc.left + colVal, y, colX - 2, y + rowH}, e.editValue, sizeof(e.editValue));
         e.isEditing = (m_ui.focusId == 1003 + idx * 6);
