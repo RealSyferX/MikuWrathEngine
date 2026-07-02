@@ -1011,6 +1011,54 @@ void App::RenderBreakpoints() {
     if (UI::Button(m_ui, 8003, {130, 35, 230, 57}, "Clear All")) {
         m_debugger.ClearAllBreakpoints();
     }
+
+    // -------------------------------------------------------
+    // Register view + stepping controls (shown when halted)
+    // -------------------------------------------------------
+    if (m_debugger.IsHalted()) {
+        auto ctx = m_debugger.GetLastContext();
+        int regY = y + (int)bps.size() * rowH + 10;
+
+        UI::DrawText(m_ui.g, 8, regY, "=== HALTED ===", Theme::CLR_RED());
+        regY += 20;
+
+        // Register grid — 4 columns
+        struct RegInfo { const char* name; uint64_t value; };
+        RegInfo regs[] = {
+            {"RAX", ctx.rax}, {"RBX", ctx.rbx}, {"RCX", ctx.rcx}, {"RDX", ctx.rdx},
+            {"RSI", ctx.rsi}, {"RDI", ctx.rdi}, {"RSP", ctx.rsp}, {"RBP", ctx.rbp},
+            {"R8 ", ctx.r8},  {"R9 ", ctx.r9},  {"R10", ctx.r10}, {"R11", ctx.r11},
+            {"R12", ctx.r12}, {"R13", ctx.r13}, {"R14", ctx.r14}, {"R15", ctx.r15},
+        };
+
+        int colW = (w - 16) / 4;
+        for (int i = 0; i < 16; i++) {
+            int col = i % 4;
+            int row = i / 4;
+            int rx = 8 + col * colW;
+            int ry = regY + row * 18;
+
+            char buf[40];
+            snprintf(buf, sizeof(buf), "%s=%016llX", regs[i].name, (unsigned long long)regs[i].value);
+            UI::DrawText(m_ui.g, rx, ry, buf, Theme::CLR_BLUE());
+        }
+
+        regY += (16 / 4 + 1) * 18;
+
+        char ripBuf[40];
+        snprintf(ripBuf, sizeof(ripBuf), "RIP=%016llX  EFlags=%08X",
+                 (unsigned long long)ctx.rip, ctx.eflags);
+        UI::DrawText(m_ui.g, 8, regY, ripBuf, Theme::CLR_YELLOW());
+        regY += 20;
+
+        // Step/Continue buttons
+        if (UI::Button(m_ui, 8100, {8, regY, 108, regY + 24}, "Step Into (F11)")) {
+            m_debugger.StepInto();
+        }
+        if (UI::Button(m_ui, 8101, {115, regY, 215, regY + 24}, "Continue (F5)")) {
+            m_debugger.Continue();
+        }
+    }
 }
 
 // ============================================================
@@ -1639,6 +1687,15 @@ void App::HandleHotkeys() {
             m_ui.focusId = -1;
         }
         return;
+    }
+
+    // Debugger stepping hotkeys (no Ctrl required) — only active when
+    // the breakpoints view is open and the target is halted.
+    if (m_showBreakpoints && m_debugger.IsHalted()) {
+        if (m_ui.keyPressed) {
+            if (m_ui.keyCode == VK_F5) m_debugger.Continue();
+            else if (m_ui.keyCode == VK_F11) m_debugger.StepInto();
+        }
     }
 
     if (!m_ui.keyCtrl) return;

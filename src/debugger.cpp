@@ -176,6 +176,7 @@ bool Debugger::Attach() {
     }
 
     m_readyEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    m_resumeEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr); // manual-reset
 
     m_attached.store(true);
     m_running.store(true);
@@ -191,6 +192,12 @@ bool Debugger::Attach() {
 
 void Debugger::Detach() {
     if (!m_attached.load()) return;
+
+    // If the target is halted, unblock the debug thread so it can exit
+    if (m_halted.load()) {
+        m_halted.store(false);
+        if (m_resumeEvent) SetEvent(m_resumeEvent);
+    }
 
     m_running.store(false);
     if (m_thread.joinable()) m_thread.join();
@@ -232,6 +239,10 @@ void Debugger::Detach() {
     if (m_readyEvent) {
         CloseHandle(m_readyEvent);
         m_readyEvent = nullptr;
+    }
+    if (m_resumeEvent) {
+        CloseHandle(m_resumeEvent);
+        m_resumeEvent = nullptr;
     }
 }
 
@@ -380,6 +391,65 @@ void Debugger::SingleStepThread(DWORD tid) {
     CloseHandle(hThread);
 }
 
+void Debugger::CaptureContext(DWORD tid) {
+    HANDLE hThread = OpenThread(THREAD_GET_CONTEXT, FALSE, tid);
+    if (!hThread) return;
+    CONTEXT ctx = {};
+    ctx.ContextFlags = CONTEXT_FULL;
+    if (GetThreadContext(hThread, &ctx)) {
+        m_lastContext.rax = ctx.Rax;
+        m_lastContext.rbx = ctx.Rbx;
+        m_lastContext.rcx = ctx.Rcx;
+        m_lastContext.rdx = ctx.Rdx;
+        m_lastContext.rsi = ctx.Rsi;
+        m_lastContext.rdi = ctx.Rdi;
+        m_lastContext.rsp = ctx.Rsp;
+        m_lastContext.rbp = ctx.Rbp;
+        m_lastContext.r8  = ctx.R8;
+        m_lastContext.r9  = ctx.R9;
+        m_lastContext.r10 = ctx.R10;
+        m_lastContext.r11 = ctx.R11;
+        m_lastContext.r12 = ctx.R12;
+        m_lastContext.r13 = ctx.R13;
+        m_lastContext.r14 = ctx.R14;
+        m_lastContext.r15 = ctx.R15;
+        m_lastContext.rip = ctx.Rip;
+        m_lastContext.eflags = (uint32_t)ctx.EFlags;
+    }
+    CloseHandle(hThread);
+}
+
+bool Debugger::StepInto() {
+    if (!m_halted.load()) return false;
+    // Set trap flag on halted thread so it executes exactly one
+    // instruction before raising EXCEPTION_SINGLE_STEP again.
+    HANDLE hThread = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT, FALSE, m_haltedThreadId);
+    if (hThread) {
+        CONTEXT ctx = {};
+        ctx.ContextFlags = CONTEXT_FULL;
+        if (GetThreadContext(hThread, &ctx)) {
+            ctx.EFlags |= 0x100; // Trap flag for single step
+            SetThreadContext(hThread, &ctx);
+        }
+        CloseHandle(hThread);
+    }
+    m_halted.store(false);
+    // Signal debug thread to continue
+    if (m_resumeEvent) SetEvent(m_resumeEvent);
+    return true;
+}
+
+bool Debugger::Continue() {
+    if (!m_halted.load()) return false;
+    m_halted.store(false);
+    if (m_resumeEvent) SetEvent(m_resumeEvent);
+    return true;
+}
+
+RegisterSnapshot Debugger::GetLastContext() const {
+    return m_lastContext;
+}
+
 bool Debugger::StartFindAccesses(uintptr_t addr, size_t size) {
     if (m_finding.load()) StopFind();
     if (!m_attached.load()) {
@@ -481,6 +551,27 @@ void Debugger::DebugThread() {
                 // Whether or not it was our breakpoint (the system attach
                 // breakpoint also arrives here), swallow it.
                 continueStatus = DBG_CONTINUE;
+
+                // If this was our breakpoint and we're not in find mode,
+                // halt and wait for the UI to Step/Continue.
+                if (found && !m_finding.load()) {
+                    CaptureContext(tid);
+                    m_haltedThreadId = tid;
+                    m_halted.store(true);
+
+                    // Continue this event so the thread is no longer
+                    // suspended by the debug subsystem, then wait for
+                    // StepInto()/Continue() to signal m_resumeEvent.
+                    // The trap flag armed above causes the target to
+                    // single-step and re-freeze after one instruction.
+                    ContinueDebugEvent(de.dwProcessId, de.dwThreadId, continueStatus);
+
+                    if (m_resumeEvent) {
+                        WaitForSingleObject(m_resumeEvent, INFINITE);
+                        ResetEvent(m_resumeEvent);
+                    }
+                    continue; // Skip the end-of-loop ContinueDebugEvent
+                }
             } else if (er.ExceptionCode == EXCEPTION_SINGLE_STEP) {
                 uintptr_t ip = (uintptr_t)er.ExceptionAddress;
                 bool wasStepping = false;
@@ -513,9 +604,20 @@ void Debugger::DebugThread() {
                     RecordAccessHit(tid, ip);
                     continueStatus = DBG_CONTINUE;
                 } else {
-                    // Regular hardware breakpoint hit. Hardware breakpoints
-                    // auto-reset on continue, so just continue for now.
+                    // Regular hardware breakpoint hit — halt and wait
+                    // for StepInto()/Continue() from the UI.
                     continueStatus = DBG_CONTINUE;
+                    CaptureContext(tid);
+                    m_haltedThreadId = tid;
+                    m_halted.store(true);
+
+                    ContinueDebugEvent(de.dwProcessId, de.dwThreadId, continueStatus);
+
+                    if (m_resumeEvent) {
+                        WaitForSingleObject(m_resumeEvent, INFINITE);
+                        ResetEvent(m_resumeEvent);
+                    }
+                    continue; // Skip the end-of-loop ContinueDebugEvent
                 }
             } else {
                 continueStatus = DBG_EXCEPTION_NOT_HANDLED;

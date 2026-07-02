@@ -39,6 +39,15 @@ struct Breakpoint {
     char label[128] = {};
 };
 
+struct RegisterSnapshot {
+    uint64_t rax=0, rbx=0, rcx=0, rdx=0;
+    uint64_t rsi=0, rdi=0, rsp=0, rbp=0;
+    uint64_t r8=0, r9=0, r10=0, r11=0;
+    uint64_t r12=0, r13=0, r14=0, r15=0;
+    uint64_t rip=0;
+    uint32_t eflags=0;
+};
+
 class Debugger {
 public:
     Debugger() = default;
@@ -52,6 +61,10 @@ public:
     void Detach();
     bool IsAttached() const { return m_attached.load(); }
     bool IsRunning() const { return m_running.load(); }
+    bool IsHalted() const { return m_halted.load(); }
+    RegisterSnapshot GetLastContext() const;
+    bool StepInto();
+    bool Continue();
 
     // Wait for debug thread to be ready (after Attach)
     bool WaitForReady(int timeoutMs = 5000);
@@ -79,6 +92,10 @@ private:
     std::thread m_thread;
 
     HANDLE m_readyEvent = nullptr;        // Signaled when debug thread is ready
+    HANDLE m_resumeEvent = nullptr;       // Signaled by StepInto/Continue to resume a halted thread
+    std::atomic<bool> m_halted{false};    // True when target is stopped at a breakpoint
+    RegisterSnapshot m_lastContext;       // Last captured thread context (at halt)
+    DWORD m_haltedThreadId = 0;           // Thread that triggered the halt
     std::atomic<bool> m_hwBpDirty{false}; // Flag: breakpoints need re-applying
 
     mutable std::mutex m_mutex;
@@ -115,4 +132,5 @@ private:
     uintptr_t GetInstructionPointer(DWORD threadId);
     void RecordAccessHit(DWORD threadId, uintptr_t ip);
     void SingleStepThread(DWORD tid);
+    void CaptureContext(DWORD tid);
 };
