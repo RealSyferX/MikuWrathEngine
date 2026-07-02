@@ -35,6 +35,7 @@ private:
     UIContext m_ui;
 
     uintptr_t m_hexAddr = 0x00400000;
+    uintptr_t m_hexScrollBase = 0;  // Base address for the scrollbar window (64KB-aligned)
     uintptr_t m_disasmAddr = 0x00400000;
     char m_addrBuf[32] = "00400000";
 

@@ -715,6 +715,12 @@ void MemoryViewer::RenderHex(Gdiplus::Graphics* g, RECT& rc) {
         return;
     }
 
+    // Scrollbar geometry — reserve the rightmost sbW pixels for a draggable
+    // scrollbar so it never overlaps the hex data.
+    int sbW = 12;
+    int availW = rc.right - rc.left - sbW - 2;   // available width for hex content
+    int contentRight = rc.left + availW;         // hex data must stay left of this
+
     // Dynamically size the number of hex lines to the available panel height
     // so we never read or render more rows than fit on screen.
     int lineH = std::max(16, UI::g_fontSize + 7);
@@ -791,7 +797,8 @@ void MemoryViewer::RenderHex(Gdiplus::Graphics* g, RECT& rc) {
         if (m_ui.mousePressed && !m_showPatchPopup && !m_showSigMaker && !m_showAsmPopup) {
             int mx = m_ui.mouse.x;
             int my = m_ui.mouse.y;
-            if (my >= y && my < y + lineH) {
+            // Ignore clicks that land in the scrollbar area on the right edge.
+            if (mx < contentRight && my >= y && my < y + lineH) {
                 int clickedCol = -1;
                 if (mx >= hexStartX && mx < hexStartX + m_hexCols * byteW) {
                     clickedCol = (mx - hexStartX) / byteW;
@@ -810,6 +817,40 @@ void MemoryViewer::RenderHex(Gdiplus::Graphics* g, RECT& rc) {
         }
 
         y += lineH;
+    }
+
+    // Scrollbar — represents a 64KB window starting at m_hexScrollBase.
+    // Each line = m_hexCols bytes (16 bytes), so 4096 lines per 64KB window.
+    // The scrollbar is fully functional: drag the thumb or click the track
+    // to scroll through memory. Mouse wheel scrolling stays in sync because
+    // m_hexScrollBase is re-anchored whenever m_hexAddr leaves the window.
+    int sbX = rc.right - sbW;
+    RECT sbRc = { sbX, rc.top, rc.right, rc.bottom };
+
+    int bytesPerLine = m_hexCols;
+    int windowBytes = 0x10000; // 64KB
+    int totalLines = windowBytes / bytesPerLine; // 4096 lines
+    int visibleLines = m_hexLines;
+
+    // Current scroll position within the 64KB window that contains m_hexAddr.
+    uintptr_t windowBase = m_hexAddr & ~((uintptr_t)0xFFFF); // align to 64KB
+    int scrollLine = (int)((m_hexAddr - windowBase) / bytesPerLine);
+
+    // If the user scrolled past the current window (via wheel/keyboard or
+    // GoToAddress), re-anchor the scrollbar base to the new 64KB block.
+    if (m_hexAddr < m_hexScrollBase || m_hexAddr >= m_hexScrollBase + (uintptr_t)windowBytes) {
+        m_hexScrollBase = windowBase;
+    }
+
+    int oldScroll = scrollLine;
+    // RECT members are LONG; promote to int so std::max can deduce a type.
+    int trackH = rc.bottom - rc.top;
+    int thumbH = std::max(20, trackH * visibleLines / totalLines);
+    UI::Scrollbar(m_ui, 5000, sbRc, thumbH, totalLines, visibleLines, &scrollLine);
+
+    // Apply scrollbar drag/track clicks back to m_hexAddr.
+    if (scrollLine != oldScroll) {
+        m_hexAddr = m_hexScrollBase + (uintptr_t)scrollLine * bytesPerLine;
     }
 }
 
