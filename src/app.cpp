@@ -29,6 +29,7 @@ App::App() {
 
     m_scanner.SetProcess(&m_process);
     m_debugger.SetProcessManager(&m_process);
+    m_debugger.SetDisassembler(&m_disasm);
     m_memViewer = std::make_unique<MemoryViewer>();
     m_memViewer->SetProcess(&m_process);
     m_memViewer->SetDisassembler(&m_disasm);
@@ -1058,7 +1059,10 @@ void App::RenderBreakpoints() {
         if (UI::Button(m_ui, 8100, {8, regY, 108, regY + 24}, "Step Into (F11)")) {
             m_debugger.StepInto();
         }
-        if (UI::Button(m_ui, 8101, {115, regY, 215, regY + 24}, "Continue (F5)")) {
+        if (UI::Button(m_ui, 8102, {115, regY, 215, regY + 24}, "Step Over (F10)")) {
+            m_debugger.StepOver();
+        }
+        if (UI::Button(m_ui, 8101, {222, regY, 322, regY + 24}, "Continue (F5)")) {
             m_debugger.Continue();
         }
     }
@@ -1698,6 +1702,7 @@ void App::HandleHotkeys() {
         if (m_ui.keyPressed) {
             if (m_ui.keyCode == VK_F5) m_debugger.Continue();
             else if (m_ui.keyCode == VK_F11) m_debugger.StepInto();
+            else if (m_ui.keyCode == VK_F10) m_debugger.StepOver();
         }
     }
 

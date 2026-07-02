@@ -8,6 +8,8 @@
 #include <vector>
 #include <set>
 
+class Disassembler;
+
 enum class DebuggerType : int {
     None = 0,
     VEH,        // Vectored Exception Handler — hardware breakpoints only
@@ -54,6 +56,7 @@ public:
     ~Debugger();
 
     void SetProcessManager(ProcessManager* pm) { m_pm = pm; }
+    void SetDisassembler(Disassembler* dis) { m_disasm = dis; }
     void SetType(DebuggerType type) { m_type = type; }
     DebuggerType GetType() const { return m_type; }
 
@@ -64,6 +67,7 @@ public:
     bool IsHalted() const { return m_halted.load(); }
     RegisterSnapshot GetLastContext() const;
     bool StepInto();
+    bool StepOver();
     bool Continue();
 
     // Wait for debug thread to be ready (after Attach)
@@ -84,6 +88,7 @@ public:
 
 private:
     ProcessManager* m_pm = nullptr;
+    Disassembler* m_disasm = nullptr;
     DWORD m_pid = 0;
     DebuggerType m_type = DebuggerType::Windows;
 
@@ -107,6 +112,7 @@ private:
     // Breakpoints
     std::map<int, Breakpoint> m_breakpoints;
     int m_nextBpId = 1;
+    int m_tempBpId = -1;  // temporary breakpoint for step-over
 
     // Hardware breakpoint slots (DR0-DR3)
     int m_hwSlotUsed[4] = {0, 0, 0, 0};

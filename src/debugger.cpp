@@ -1,4 +1,5 @@
 #include "debugger.h"
+#include "disassembler.h"
 #include <tlhelp32.h>
 #include <cstdio>
 #include <cstring>
@@ -449,6 +450,47 @@ bool Debugger::StepInto() {
     return true;
 }
 
+bool Debugger::StepOver() {
+    if (!m_halted.load()) return false;
+
+    // Get current RIP
+    uintptr_t rip;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        rip = m_lastContext.rip;
+    }
+
+    // Read and disassemble the current instruction
+    bool isCall = false;
+    size_t instSize = 0;
+    if (m_disasm && m_disasm->IsInitialized() && m_pm) {
+        uint8_t buf[16];
+        if (m_pm->Read(rip, buf, sizeof(buf))) {
+            auto insts = m_disasm->Disassemble(rip, buf, sizeof(buf), 1);
+            if (!insts.empty()) {
+                instSize = insts[0].size;
+                // Check if it's a CALL instruction
+                if (strncmp(insts[0].mnemonic, "call", 4) == 0) {
+                    isCall = true;
+                }
+            }
+        }
+    }
+
+    if (isCall && instSize > 0) {
+        // Set temporary breakpoint at instruction after the CALL
+        m_tempBpId = AddBreakpoint(rip + instSize, BreakType::Execute, 1, "__stepover");
+        // Continue — the temp BP will halt us when the CALL returns
+        m_stepRequested.store(false);
+        m_halted.store(false);
+        if (m_resumeEvent) SetEvent(m_resumeEvent);
+    } else {
+        // Not a CALL — just step into
+        return StepInto();
+    }
+    return true;
+}
+
 bool Debugger::Continue() {
     if (!m_halted.load()) return false;
     m_halted.store(false);
@@ -538,6 +580,7 @@ void Debugger::DebugThread() {
                 uintptr_t bpAddr = ip - 1;
 
                 bool found = false;
+                int foundId = -1;
                 {
                     std::lock_guard<std::mutex> lock(m_mutex);
                     for (auto& [id, bp] : m_breakpoints) {
@@ -546,6 +589,7 @@ void Debugger::DebugThread() {
                             // does not immediately re-hit the 0xCC.
                             m_pm->Write(bp.address, &bp.originalByte, 1);
                             found = true;
+                            foundId = id;
                             break;
                         }
                     }
@@ -554,6 +598,12 @@ void Debugger::DebugThread() {
                         // the single-step completes.
                         m_singleStepping.insert(tid);
                     }
+                }
+
+                // Check if this is a temporary step-over breakpoint
+                if (foundId == m_tempBpId && m_tempBpId != -1) {
+                    RemoveBreakpoint(m_tempBpId);
+                    m_tempBpId = -1;
                 }
 
                 if (found) {
