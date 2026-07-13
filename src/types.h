@@ -87,7 +87,13 @@ inline void CopyToClipboard(HWND hwnd, const char* text) {
         if (void* p = GlobalLock(h)) {
             memcpy(p, text, len);
             GlobalUnlock(h);
-            SetClipboardData(CF_TEXT, h);
+            // Ownership only transfers to the system on success.
+            if (!SetClipboardData(CF_TEXT, h)) {
+                GlobalFree(h);
+            }
+        } else {
+            // Lock failed: SetClipboardData never called, so we still own h.
+            GlobalFree(h);
         }
     }
     CloseClipboard();
