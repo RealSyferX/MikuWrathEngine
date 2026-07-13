@@ -161,13 +161,12 @@ static void test_address_parsing() {
     CHECK(ParsePlainHexAddress("7FF612340000") == 0x7FF612340000ull);
 
     // module+offset splitting.
-    // NOTE: SplitModuleOffset parses the offset with strtoull base 0, matching
-    // the original ParseAddressString code. "1A2B" without a 0x prefix is NOT
-    // valid decimal, so strtoull stops at 'A' -> 1. Document that explicitly.
+    // Cheat-Engine convention: module offsets are hexadecimal. A bare offset
+    // is parsed as hex, and an explicit "0x" prefix is also honored.
     std::string mod; uintptr_t off = 0;
     CHECK(SplitModuleOffset("game.exe+1A2B", mod, off));
     CHECK(mod == "game.exe");
-    CHECK(off == 1);        // base-0 parse of bare "1A2B" stops at 'A'
+    CHECK(off == 0x1A2B);   // bare offset parsed as hex
 
     // With an explicit 0x prefix the offset is parsed as hex.
     mod.clear(); off = 0;
@@ -175,11 +174,11 @@ static void test_address_parsing() {
     CHECK(mod == "game.exe");
     CHECK(off == 0x1A2B);   // 0x prefix -> parsed as hex
 
-    // Decimal offset without prefix
+    // Bare offset parsed as hex (4096 hex == 0x4096)
     mod.clear(); off = 0;
     CHECK(SplitModuleOffset("mod.dll+4096", mod, off));
     CHECK(mod == "mod.dll");
-    CHECK(off == 4096);
+    CHECK(off == 0x4096);
 
     // Trailing whitespace on module name and leading whitespace on offset trimmed
     mod.clear(); off = 0;

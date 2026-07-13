@@ -71,7 +71,9 @@ inline bool SplitModuleOffset(const std::string& str,
     if (start != std::string::npos) offsetStr = offsetStr.substr(start);
 
     moduleOut = modName;
-    offsetOut = (uintptr_t)strtoull(offsetStr.c_str(), nullptr, 0);
+    // Cheat-Engine convention: module offsets are hexadecimal. Base 16 also
+    // accepts a leading "0x" prefix, so it handles both bare and prefixed forms.
+    offsetOut = (uintptr_t)strtoull(offsetStr.c_str(), nullptr, 16);
     return true;
 }
 
