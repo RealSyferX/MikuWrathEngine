@@ -179,20 +179,20 @@ bool ProcessManager::EnumModules(std::vector<HMODULE>& out) const {
 
 uintptr_t ProcessManager::GetModuleBase(const char* moduleName) const {
     if (!m_hProcess) return 0;
-    std::vector<HMODULE> mods;
-    if (!EnumModules(mods)) return 0;
 
-    for (HMODULE mod : mods) {
-        wchar_t wname[MAX_PATH];
-        if (GetModuleBaseNameW(m_hProcess, mod, wname, MAX_PATH)) {
-            char nameBuf[MAX_PATH];
-            WideCharToMultiByte(CP_UTF8, 0, wname, -1, nameBuf, MAX_PATH, nullptr, nullptr);
-            if (!moduleName || _stricmp(nameBuf, moduleName) == 0) {
-                MODULEINFO mi;
-                if (GetModuleInformation(m_hProcess, mod, &mi, sizeof(mi))) {
-                    return (uintptr_t)mi.lpBaseOfDll;
-                }
-            }
+    // Reuse the same lazy cache that FormatAddress maintains so manual-add and
+    // Go-To operations don't trigger a full EnumProcessModulesEx sweep plus a
+    // GetModuleBaseNameW call per module on every parse.
+    if (m_modulesDirty) {
+        m_cachedModules = EnumerateModules();
+        m_modulesDirty = false;
+    }
+
+    for (auto& m : m_cachedModules) {
+        // A null moduleName means "any module"; preserve the original behavior
+        // of returning the first enumerated module's base.
+        if (!moduleName || _stricmp(m.name.c_str(), moduleName) == 0) {
+            return m.base;
         }
     }
     return 0;
