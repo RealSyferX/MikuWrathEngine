@@ -513,7 +513,7 @@ bool Debugger::StepOver() {
 
     if (isCall && instSize > 0) {
         // Set temporary breakpoint at instruction after the CALL
-        m_tempBpId = AddBreakpoint(rip + instSize, BreakType::Execute, 1, "__stepover");
+        m_tempBpId.store(AddBreakpoint(rip + instSize, BreakType::Execute, 1, "__stepover"));
         // Continue — the temp BP will halt us when the CALL returns
         m_stepRequested.store(false);
         m_halted.store(false);
@@ -635,9 +635,10 @@ void Debugger::DebugThread() {
                 }
 
                 // Check if this is a temporary step-over breakpoint
-                if (foundId == m_tempBpId && m_tempBpId != -1) {
-                    RemoveBreakpoint(m_tempBpId);
-                    m_tempBpId = -1;
+                int tmp = m_tempBpId.load();
+                if (foundId == tmp && tmp != -1) {
+                    RemoveBreakpoint(tmp);
+                    m_tempBpId.store(-1);
                 }
 
                 if (found) {

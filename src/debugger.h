@@ -112,7 +112,7 @@ private:
     // Breakpoints
     std::map<int, Breakpoint> m_breakpoints;
     int m_nextBpId = 1;
-    int m_tempBpId = -1;  // temporary breakpoint for step-over
+    std::atomic<int> m_tempBpId{-1};  // temporary breakpoint for step-over
 
     // Hardware breakpoint slots (DR0-DR3)
     int m_hwSlotUsed[4] = {0, 0, 0, 0};
