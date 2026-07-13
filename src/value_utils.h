@@ -12,15 +12,23 @@ inline std::string ReadValueString(const ProcessManager& pm, uintptr_t addr, Val
     case ValueType::Qword: { uint64_t v; if (pm.Read(addr, &v, 8)) { char b[32]; snprintf(b, sizeof(b), "%llu", (unsigned long long)v); return b; } return "??"; }
     case ValueType::Float32: { float v; if (pm.Read(addr, &v, 4)) { char b[32]; snprintf(b, sizeof(b), "%g", v); return b; } return "??"; }
     case ValueType::Float64: { double v; if (pm.Read(addr, &v, 8)) { char b[32]; snprintf(b, sizeof(b), "%g", v); return b; } return "??"; }
-    case ValueType::String: { char buf[64] = {}; if (pm.Read(addr, buf, 63)) return std::string(buf); return "??"; }
+    case ValueType::String: {
+        char buf[64] = {};
+        size_t got = pm.ReadPartial(addr, buf, 63);
+        if (got == 0) return "??";
+        if (got > 63) got = 63;
+        buf[got] = '\0';
+        return std::string(buf);
+    }
     case ValueType::AOB: {
         if (aobLen == 0 || aobLen > 64) aobLen = 8;
-        uint8_t buf[64]; if (pm.Read(addr, buf, aobLen)) {
-            std::string r; char h[4];
-            for (size_t i = 0; i < aobLen; i++) { snprintf(h, sizeof(h), "%02X ", buf[i]); r += h; }
-            return r;
-        }
-        return "??";
+        uint8_t buf[64];
+        size_t got = pm.ReadPartial(addr, buf, aobLen);
+        if (got == 0) return "??";
+        std::string r; char h[4];
+        for (size_t i = 0; i < got; i++) { snprintf(h, sizeof(h), "%02X ", buf[i]); r += h; }
+        for (size_t i = got; i < aobLen; i++) r += "?? ";
+        return r;
     }
     }
     return "??";
