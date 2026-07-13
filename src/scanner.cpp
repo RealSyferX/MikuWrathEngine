@@ -353,14 +353,21 @@ void Scanner::NewScanWorker(ValueType type, int scanType,
                     bool match = false;
                     const uint8_t* ptr = data.data() + off;
 
-                    if (type == ValueType::String) {
-                        match = (memcmp(ptr, m_searchString.data(), strLen) == 0);
-                    } else if (type == ValueType::AOB) {
-                        match = true;
-                        for (size_t i = 0; i < patternLen; i++) {
-                            if (m_aobPattern.mask[i] && ptr[i] != m_aobPattern.bytes[i]) {
-                                match = false;
-                                break;
+                    // String/AOB are non-numeric; Bigger/Smaller/Between have no
+                    // defined ordering, so any first-scan operator falls back to
+                    // Exact (memcmp-only) semantics and valueStr2 is ignored. The
+                    // numeric branches below (scanType == 0 / 1 / 2 / 3) are only
+                    // reached for numeric value types.
+                    if (type == ValueType::String || type == ValueType::AOB) {
+                        if (type == ValueType::String) {
+                            match = (memcmp(ptr, m_searchString.data(), strLen) == 0);
+                        } else {
+                            match = true;
+                            for (size_t i = 0; i < patternLen; i++) {
+                                if (m_aobPattern.mask[i] && ptr[i] != m_aobPattern.bytes[i]) {
+                                    match = false;
+                                    break;
+                                }
                             }
                         }
                     } else if (scanType == 0) {
@@ -498,6 +505,16 @@ bool Scanner::NextScanWorker(int nextScanType,
                 uint64_t curU = isInt ? ToUInt64(cur) : 0;
                 uint64_t prevU = isInt ? ToUInt64(prev) : 0;
 
+                // Bigger(1)/Smaller(2)/Between(3) are undefined for non-numeric
+                // String/AOB value types: there is no ordinal value to order
+                // against and the target value is never parsed for them, so
+                // running the numeric comparison would emit garbage (every
+                // address for Between, none for Bigger/Smaller). Skip those
+                // comparisons so no result is emitted — the operator is
+                // meaningless, not an error. Exact(0), Changed(4), Unchanged(5),
+                // Increased(6) and Decreased(7) remain valid for every type.
+                if (IsNumericType(m_valueType) || nextScanType == 0 ||
+                    nextScanType >= 4) {
                 switch (nextScanType) {
                 case 0: { // exact
                     // AOB/String have no targetBuf (IsNumericType is false,
@@ -540,6 +557,7 @@ bool Scanner::NextScanWorker(int nextScanType,
                 case 5: match = (memcmp(cur, prev, vsz) == 0); break;      // unchanged
                 case 6: match = isInt ? (curU > prevU) : (curVal > prevVal); break;      // increased
                 case 7: match = isInt ? (curU < prevU) : (curVal < prevVal); break;      // decreased
+                }
                 }
 
                 if (match) {
