@@ -505,7 +505,15 @@ bool Debugger::StepOver() {
 
     if (isCall && instSize > 0) {
         // Set temporary breakpoint at instruction after the CALL
-        m_tempBpId.store(AddBreakpoint(rip + instSize, BreakType::Execute, 1, "__stepover"));
+        int tmpId = AddBreakpoint(rip + instSize, BreakType::Execute, 1, "__stepover");
+        if (tmpId < 0) {
+            // No free DR slot (VEH allocates the temp BP as hardware). Do NOT
+            // clear m_halted or signal the resume event — that would let the
+            // target run away un-halted with no breakpoint to catch it. Fall
+            // back to a single-step instead, which halts after one instruction.
+            return StepInto();
+        }
+        m_tempBpId.store(tmpId);
         // Continue — the temp BP will halt us when the CALL returns
         m_stepRequested.store(false);
         m_halted.store(false);
@@ -729,6 +737,34 @@ void Debugger::DebugThread() {
                 } else {
                     // Regular hardware breakpoint hit — halt and wait
                     // for StepInto()/Continue() from the UI.
+                    //
+                    // Under the VEH debugger a step-over temporary breakpoint
+                    // is a HARDWARE breakpoint (AddBreakpoint only emits INT3
+                    // for DebuggerType::Windows), so it fires here as
+                    // EXCEPTION_SINGLE_STEP rather than EXCEPTION_BREAKPOINT.
+                    // Resolve which breakpoint matched this instruction so we
+                    // can drop the temp breakpoint and free its DR slot, just
+                    // like the INT3 step-over path does.
+                    int matchedId = -1;
+                    {
+                        std::lock_guard<std::mutex> lock(m_mutex);
+                        for (auto& [id, bp] : m_breakpoints) {
+                            if (bp.hardware && bp.enabled && bp.address == ip) {
+                                matchedId = id;
+                                break;
+                            }
+                        }
+                    }
+                    // Lock released. RemoveBreakpoint() locks m_mutex itself
+                    // and m_mutex is non-recursive, so it must be called only
+                    // after releasing the lock above — mirroring the INT3
+                    // step-over cleanup and the self-deadlock fix elsewhere.
+                    int tmp = m_tempBpId.load();
+                    if (matchedId == tmp && tmp != -1) {
+                        RemoveBreakpoint(tmp);
+                        m_tempBpId.store(-1);
+                    }
+
                     continueStatus = DBG_CONTINUE;
                     CaptureContext(tid);
                     m_halted.store(true);
