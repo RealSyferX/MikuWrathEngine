@@ -202,8 +202,9 @@ void MemoryViewer::RefreshDisasm() {
     m_disasmView.clear();
     if (!m_pm || !m_pm->IsOpen() || !m_dis || !m_dis->IsInitialized()) return;
     uint8_t buf[1024];
-    if (m_pm->Read(m_disasmAddr, buf, sizeof(buf))) {
-        m_disasmView = m_dis->Disassemble(m_disasmAddr, buf, sizeof(buf), 64);
+    size_t got = m_pm->ReadPartial(m_disasmAddr, buf, sizeof(buf));
+    if (got > 0) {
+        m_disasmView = m_dis->Disassemble(m_disasmAddr, buf, got, 64);
     }
 }
 
@@ -729,14 +730,19 @@ void MemoryViewer::RenderHex(Gdiplus::Graphics* g, RECT& rc) {
 
     int totalBytes = m_hexLines * m_hexCols;
     std::vector<uint8_t> buf(totalBytes);
-    bool ok = m_pm->Read(m_hexAddr, buf.data(), totalBytes);
+    // Best-effort read so a page that straddles the end of a committed region
+    // still shows its readable prefix instead of blanking the whole view.
+    size_t got = m_pm->ReadPartial(m_hexAddr, buf.data(), totalBytes);
 
-    if (!ok) {
+    if (got == 0) {
         char err[128];
         snprintf(err, sizeof(err), "?? Failed to read at 0x%llX", (unsigned long long)m_hexAddr);
         UI::DrawText(g, rc.left + 4, rc.top + 4, err, Theme::CLR_RED());
         return;
     }
+
+    // Zero-fill the unreadable tail so rendering is well-defined for the whole page.
+    if (got < (size_t)totalBytes) memset(buf.data() + got, 0, totalBytes - got);
 
     // Measure character width for hit-testing and highlight positioning.
     // Consolas 9px is monospaced, so every glyph shares the same advance width.

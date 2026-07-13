@@ -16,6 +16,11 @@ public:
     bool Is64Bit() const { return m_is64Bit; }
 
     bool Read(uintptr_t addr, void* buf, size_t size) const;
+    // Best-effort read: issues a single ReadProcessMemory and returns the
+    // number of bytes actually read (0 on failure). Unlike Read, it does not
+    // require the entire range to succeed, so callers can still use the
+    // readable prefix when a request straddles the end of a committed region.
+    size_t ReadPartial(uintptr_t addr, void* buf, size_t size) const;
     bool Write(uintptr_t addr, const void* buf, size_t size) const;
 
     std::vector<MemoryRegion> EnumerateRegions(bool writableOnly = false) const;

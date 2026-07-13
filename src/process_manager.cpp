@@ -96,6 +96,13 @@ bool ProcessManager::Read(uintptr_t addr, void* buf, size_t size) const {
     return ReadProcessMemory(m_hProcess, (LPCVOID)addr, buf, size, &bytesRead) && bytesRead == size;
 }
 
+size_t ProcessManager::ReadPartial(uintptr_t addr, void* buf, size_t size) const {
+    if (!m_hProcess) return 0;
+    SIZE_T bytesRead = 0;
+    ReadProcessMemory(m_hProcess, (LPCVOID)addr, buf, size, &bytesRead);
+    return (size_t)bytesRead;
+}
+
 bool ProcessManager::Write(uintptr_t addr, const void* buf, size_t size) const {
     if (!m_hProcess) return false;
     SIZE_T written = 0;
