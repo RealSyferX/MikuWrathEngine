@@ -66,16 +66,6 @@ uint64_t Scanner::ToUInt64(const uint8_t* data) const {
     }
 }
 
-int64_t Scanner::ToInt64(const uint8_t* data) const {
-    switch (m_valueType) {
-    case ValueType::Byte:  return (int64_t)*reinterpret_cast<const uint8_t*>(data);
-    case ValueType::Word:  return (int64_t)*reinterpret_cast<const uint16_t*>(data);
-    case ValueType::Dword: return (int64_t)*reinterpret_cast<const uint32_t*>(data);
-    case ValueType::Qword: return (int64_t)*reinterpret_cast<const uint64_t*>(data);
-    default: return 0;
-    }
-}
-
 bool Scanner::IsIntegerValueType() const {
     switch (m_valueType) {
     case ValueType::Byte:

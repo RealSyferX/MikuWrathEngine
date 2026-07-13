@@ -88,9 +88,8 @@ private:
                         bool hex);
 
     double ToDouble(const uint8_t* data) const;
-    // Integer-aware reads that avoid the precision loss of routing large
+    // Integer-aware read that avoids the precision loss of routing large
     // 8-byte values through double (uint64_t -> double loses bits above 2^53).
-    int64_t ToInt64(const uint8_t* data) const;
     uint64_t ToUInt64(const uint8_t* data) const;
     // True for Byte/Word/Dword/Qword — the types that must use integer
     // comparisons rather than the double path (which is for Float32/Float64).
