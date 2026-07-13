@@ -98,11 +98,14 @@ void AddressTable::Load(const char* path) {
             std::getline(iss, valStr, '\t');
             std::getline(iss, descStr);
             AddressEntry e = {};
+            int typeInt;
             try {
-                e.type = (ValueType)std::stoi(typeStr);
+                typeInt = std::stoi(typeStr);
                 e.address = (uintptr_t)std::stoull(addrStr);
                 e.frozen = (std::stoi(frozenStr) != 0);
             } catch (...) { continue; }
+            if (typeInt < 0 || typeInt > (int)ValueType::AOB) continue;
+            e.type = (ValueType)typeInt;
             strncpy(e.editValue, valStr.c_str(), sizeof(e.editValue) - 1);
             strncpy(e.description, descStr.c_str(), sizeof(e.description) - 1);
             m_entries.push_back(e);
@@ -111,6 +114,7 @@ void AddressTable::Load(const char* path) {
             int typeInt, frozen;
             uintptr_t addr;
             if (iss >> typeInt >> addr >> frozen) {
+                if (typeInt < 0 || typeInt > (int)ValueType::AOB) continue;
                 AddressEntry e = {};
                 e.type = (ValueType)typeInt;
                 e.address = addr;
