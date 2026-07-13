@@ -767,7 +767,14 @@ void App::RenderAddressTable() {
         UI::FillRect(m_ui.g, {rc.left, y, rc.right, y + rowH}, rowBg);
 
         // Freeze checkbox
+        bool wasFrozen = e.frozen;
         UI::Checkbox(m_ui, 1000 + idx * 6, {rc.left + colFz, y, rc.left + colFz + 20, y + rowH}, "", &e.frozen);
+        // When freeze is freshly enabled, capture the current (live) value as the
+        // canonical frozen value so the buffer is never empty while frozen.
+        if (!wasFrozen && e.frozen) {
+            strncpy(e.frozenValue, e.editValue, sizeof(e.frozenValue) - 1);
+            e.frozenValue[sizeof(e.frozenValue) - 1] = '\0';
+        }
 
         // Description
         UI::TextInput(m_ui, 1001 + idx * 6, {rc.left + colDesc, y, rc.left + colAddr - 2, y + rowH},
@@ -792,6 +799,10 @@ void App::RenderAddressTable() {
         if (valChanged) {
             if (m_ui.keyPressed && m_ui.keyCode == VK_RETURN) {
                 ::WriteValueString(m_process, e.address, e.type, e.editValue);
+                // Mirror the committed value into the canonical frozen buffer so a
+                // frozen entry keeps holding the user's intended value.
+                strncpy(e.frozenValue, e.editValue, sizeof(e.frozenValue) - 1);
+                e.frozenValue[sizeof(e.frozenValue) - 1] = '\0';
                 e.isEditing = false;
                 m_ui.focusId = -1;
             }

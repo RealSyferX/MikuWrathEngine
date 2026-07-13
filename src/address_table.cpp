@@ -35,8 +35,8 @@ void AddressTable::UpdateFrozen(const ProcessManager& pm, float dt) {
     if (m_freezeTimer < 0.01f) return;
     m_freezeTimer = 0.0f;
     for (auto& e : m_entries) {
-        if (e.frozen && e.editValue[0] && !e.isEditing) {
-            ::WriteValueString(pm, e.address, e.type, e.editValue);
+        if (e.frozen && e.frozenValue[0] && !e.isEditing) {
+            ::WriteValueString(pm, e.address, e.type, e.frozenValue);
         }
     }
 }
@@ -45,7 +45,7 @@ void AddressTable::UpdateValues(const ProcessManager& pm, int scrollPos, int vis
     int start = std::max(0, scrollPos);
     int end = std::min(scrollPos + visibleCount, (int)m_entries.size());
     for (int i = start; i < end; i++) {
-        if (!m_entries[i].isEditing) {
+        if (!m_entries[i].isEditing && !m_entries[i].frozen) {
             std::string val = ::ReadValueString(pm, m_entries[i].address, m_entries[i].type);
             strncpy(m_entries[i].editValue, val.c_str(), sizeof(m_entries[i].editValue) - 1);
             m_entries[i].editValue[sizeof(m_entries[i].editValue) - 1] = '\0';
@@ -108,6 +108,12 @@ void AddressTable::Load(const char* path) {
             e.type = (ValueType)typeInt;
             strncpy(e.editValue, valStr.c_str(), sizeof(e.editValue) - 1);
             strncpy(e.description, descStr.c_str(), sizeof(e.description) - 1);
+            // A loaded frozen entry must hold its value from frozenValue; derive
+            // it from the serialized editValue so freeze keeps working post-load.
+            if (e.frozen) {
+                strncpy(e.frozenValue, e.editValue, sizeof(e.frozenValue) - 1);
+                e.frozenValue[sizeof(e.frozenValue) - 1] = '\0';
+            }
             m_entries.push_back(e);
         } else {
             std::istringstream iss(line);
@@ -125,6 +131,10 @@ void AddressTable::Load(const char* path) {
                 std::string desc;
                 std::getline(iss >> std::ws, desc);
                 strncpy(e.description, desc.c_str(), sizeof(e.description) - 1);
+                if (e.frozen) {
+                    strncpy(e.frozenValue, e.editValue, sizeof(e.frozenValue) - 1);
+                    e.frozenValue[sizeof(e.frozenValue) - 1] = '\0';
+                }
                 m_entries.push_back(e);
             }
         }

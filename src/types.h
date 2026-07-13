@@ -64,6 +64,7 @@ struct AddressEntry {
     char description[128] = {};
     bool frozen = false;
     char editValue[64] = {};
+    char frozenValue[256] = {};   // canonical value to hold while frozen (decoupled from editValue)
     bool isEditing = false;
 };
 
