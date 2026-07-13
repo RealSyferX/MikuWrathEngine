@@ -31,8 +31,14 @@ Scanner::BytePattern Scanner::ParseAOB(const std::string& pattern) {
         } else {
             char* end = nullptr;
             unsigned long val = strtoul(token.c_str(), &end, 16);
-            if (end == token.c_str()) {
+            // Reject tokens that are not fully consumed (trailing junk like
+            // "7Fzz") or that overflow a single byte (e.g. "1234" or "1FF").
+            // Previously only a completely non-hex token was rejected, which
+            // let "1234 56" silently truncate to byte 0x34.
+            if (end != token.c_str() + token.size() || val > 0xFF) {
                 result.valid = false;
+                result.bytes.clear();
+                result.mask.clear();
                 return result;
             }
             result.bytes.push_back((uint8_t)val);

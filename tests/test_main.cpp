@@ -79,6 +79,33 @@ static void test_parse_aob() {
     // Mixed valid then invalid -> invalid (bails on the bad token)
     auto m = Scanner::ParseAOB("7F GG");
     CHECK(!m.valid);
+
+    // Multi-digit token that overflows a byte must be rejected, not silently
+    // truncated. "1234 56" previously parsed 0x1234 -> byte 0x34 and searched
+    // for "34 56"; it must now be invalid with no partial bytes left behind.
+    auto over = Scanner::ParseAOB("1234 56");
+    CHECK(!over.valid);
+    CHECK(over.bytes.empty());
+    CHECK(over.mask.empty());
+
+    // Trailing junk after a valid hex run must be rejected (not just "7F").
+    auto junk = Scanner::ParseAOB("7Fzz");
+    CHECK(!junk.valid);
+    CHECK(junk.bytes.empty());
+
+    // Three hex digits overflow a byte (0x1FF > 0xFF) -> invalid.
+    auto wide = Scanner::ParseAOB("1FF");
+    CHECK(!wide.valid);
+    CHECK(wide.bytes.empty());
+
+    // A valid pattern with a wildcard still parses: 3 entries, mask
+    // {true,false,true}, bytes {0x7F,0,0x90} (wildcard byte slot is 0).
+    auto ok = Scanner::ParseAOB("7F ?? 90");
+    CHECK(ok.valid);
+    CHECK(ok.bytes.size() == 3);
+    CHECK(ok.mask.size() == 3);
+    CHECK(ok.mask[0] == true && ok.mask[1] == false && ok.mask[2] == true);
+    CHECK(ok.bytes[0] == 0x7F && ok.bytes[1] == 0 && ok.bytes[2] == 0x90);
 }
 
 // ============================================================
