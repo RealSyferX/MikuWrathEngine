@@ -51,6 +51,42 @@ double Scanner::ToDouble(const uint8_t* data) const {
     }
 }
 
+// Read the raw integer value per m_valueType without routing through double.
+// Qword (and large Dword) values above 2^53 lose precision when converted to
+// double, so bigger/smaller/between/increased/decreased comparisons must use
+// these full-width integer reads instead.
+uint64_t Scanner::ToUInt64(const uint8_t* data) const {
+    switch (m_valueType) {
+    case ValueType::Byte:  return (uint64_t)*reinterpret_cast<const uint8_t*>(data);
+    case ValueType::Word:  return (uint64_t)*reinterpret_cast<const uint16_t*>(data);
+    case ValueType::Dword: return (uint64_t)*reinterpret_cast<const uint32_t*>(data);
+    case ValueType::Qword: return *reinterpret_cast<const uint64_t*>(data);
+    default: return 0;
+    }
+}
+
+int64_t Scanner::ToInt64(const uint8_t* data) const {
+    switch (m_valueType) {
+    case ValueType::Byte:  return (int64_t)*reinterpret_cast<const uint8_t*>(data);
+    case ValueType::Word:  return (int64_t)*reinterpret_cast<const uint16_t*>(data);
+    case ValueType::Dword: return (int64_t)*reinterpret_cast<const uint32_t*>(data);
+    case ValueType::Qword: return (int64_t)*reinterpret_cast<const uint64_t*>(data);
+    default: return 0;
+    }
+}
+
+bool Scanner::IsIntegerValueType() const {
+    switch (m_valueType) {
+    case ValueType::Byte:
+    case ValueType::Word:
+    case ValueType::Dword:
+    case ValueType::Qword:
+        return true;
+    default:
+        return false;
+    }
+}
+
 std::string Scanner::FormatValue(const uint8_t* data) const {
     char buf[64];
     switch (m_valueType) {
@@ -246,6 +282,7 @@ void Scanner::NewScanWorker(ValueType type, int scanType,
         uint8_t targetBuf[8] = {};
         uint8_t target2Buf[8] = {};
         double targetVal = 0, target2Val = 0;
+        uint64_t targetU = 0, target2U = 0;
         bool hasTarget = false;
 
         if (type == ValueType::String) {
@@ -255,9 +292,11 @@ void Scanner::NewScanWorker(ValueType type, int scanType,
         } else {
             hasTarget = ParseAndWrite(valueStr, targetBuf, vsz, hex);
             targetVal = ToDouble(targetBuf);
+            targetU = ToUInt64(targetBuf);
             if (scanType == 3) { // between
                 ParseAndWrite(valueStr2, target2Buf, vsz, hex);
                 target2Val = ToDouble(target2Buf);
+                target2U = ToUInt64(target2Buf);
             }
         }
 
@@ -307,13 +346,28 @@ void Scanner::NewScanWorker(ValueType type, int scanType,
                             break;
                         }
                     }
+                } else if (scanType == 0) {
+                    match = (memcmp(ptr, targetBuf, vsz) == 0);            // exact
+                } else if (IsIntegerValueType()) {
+                    // Full-width unsigned integer comparison — no double
+                    // precision loss for Qword / large Dword values.
+                    uint64_t curVal = ToUInt64(ptr);
+                    switch (scanType) {
+                    case 1: match = (curVal > targetU); break;             // bigger
+                    case 2: match = (curVal < targetU); break;             // smaller
+                    case 3: {                                              // between
+                        uint64_t lo = std::min(targetU, target2U);
+                        uint64_t hi = std::max(targetU, target2U);
+                        match = (curVal >= lo && curVal <= hi);
+                        break;
+                    }
+                    }
                 } else {
                     double curVal = ToDouble(ptr);
                     switch (scanType) {
-                    case 0: match = (memcmp(ptr, targetBuf, vsz) == 0); break; // exact
-                    case 1: match = (curVal > targetVal); break;               // bigger
-                    case 2: match = (curVal < targetVal); break;               // smaller
-                    case 3: {                                            // between
+                    case 1: match = (curVal > targetVal); break;           // bigger
+                    case 2: match = (curVal < targetVal); break;           // smaller
+                    case 3: {                                              // between
                         double lo = std::min(targetVal, target2Val);
                         double hi = std::max(targetVal, target2Val);
                         match = (curVal >= lo && curVal <= hi);
@@ -368,13 +422,16 @@ bool Scanner::NextScanWorker(int nextScanType,
         bool needTarget = (nextScanType <= 3); // exact/bigger/smaller/between need a target
         uint8_t targetBuf[8] = {}, target2Buf[8] = {};
         double targetVal = 0, target2Val = 0;
+        uint64_t targetU = 0, target2U = 0;
 
         if (needTarget && IsNumericType(m_valueType)) {
             ParseAndWrite(valueStr, targetBuf, vsz, hex);
             targetVal = ToDouble(targetBuf);
+            targetU = ToUInt64(targetBuf);
             if (nextScanType == 3) {
                 ParseAndWrite(valueStr2, target2Buf, vsz, hex);
                 target2Val = ToDouble(target2Buf);
+                target2U = ToUInt64(target2Buf);
             }
         }
 
@@ -399,8 +456,13 @@ bool Scanner::NextScanWorker(int nextScanType,
                 const uint8_t* prev = snap.data.data() + off;
                 bool match = false;
 
-                double curVal = IsNumericType(m_valueType) ? ToDouble(cur) : 0;
-                double prevVal = IsNumericType(m_valueType) ? ToDouble(prev) : 0;
+                bool isInt = IsIntegerValueType();
+                double curVal = (IsNumericType(m_valueType) && !isInt) ? ToDouble(cur) : 0;
+                double prevVal = (IsNumericType(m_valueType) && !isInt) ? ToDouble(prev) : 0;
+                // Full-width integer values for Byte/Word/Dword/Qword to avoid
+                // double precision loss above 2^53.
+                uint64_t curU = isInt ? ToUInt64(cur) : 0;
+                uint64_t prevU = isInt ? ToUInt64(prev) : 0;
 
                 switch (nextScanType) {
                 case 0: { // exact
@@ -421,18 +483,24 @@ bool Scanner::NextScanWorker(int nextScanType,
                     }
                     break;
                 }
-                case 1: match = (curVal > targetVal); break;               // bigger
-                case 2: match = (curVal < targetVal); break;               // smaller
+                case 1: match = isInt ? (curU > targetU) : (curVal > targetVal); break;  // bigger
+                case 2: match = isInt ? (curU < targetU) : (curVal < targetVal); break;  // smaller
                 case 3: {                                            // between
-                    double lo = std::min(targetVal, target2Val);
-                    double hi = std::max(targetVal, target2Val);
-                    match = (curVal >= lo && curVal <= hi);
+                    if (isInt) {
+                        uint64_t lo = std::min(targetU, target2U);
+                        uint64_t hi = std::max(targetU, target2U);
+                        match = (curU >= lo && curU <= hi);
+                    } else {
+                        double lo = std::min(targetVal, target2Val);
+                        double hi = std::max(targetVal, target2Val);
+                        match = (curVal >= lo && curVal <= hi);
+                    }
                     break;
                 }
                 case 4: match = (memcmp(cur, prev, vsz) != 0); break;      // changed
                 case 5: match = (memcmp(cur, prev, vsz) == 0); break;      // unchanged
-                case 6: match = (curVal > prevVal); break;                 // increased
-                case 7: match = (curVal < prevVal); break;                 // decreased
+                case 6: match = isInt ? (curU > prevU) : (curVal > prevVal); break;      // increased
+                case 7: match = isInt ? (curU < prevU) : (curVal < prevVal); break;      // decreased
                 }
 
                 if (match) {
@@ -478,13 +546,16 @@ bool Scanner::NextScanWorker(int nextScanType,
     bool needTarget = (nextScanType <= 3);
     uint8_t targetBuf[8] = {}, target2Buf[8] = {};
     double targetVal = 0, target2Val = 0;
+    uint64_t targetU = 0, target2U = 0;
 
     if (needTarget && IsNumericType(m_valueType)) {
         ParseAndWrite(valueStr, targetBuf, vsz, hex);
         targetVal = ToDouble(targetBuf);
+        targetU = ToUInt64(targetBuf);
         if (nextScanType == 3) {
             ParseAndWrite(valueStr2, target2Buf, vsz, hex);
             target2Val = ToDouble(target2Buf);
+            target2U = ToUInt64(target2Buf);
         }
     }
 
@@ -540,6 +611,27 @@ bool Scanner::NextScanWorker(int nextScanType,
                     }
                 } else {
                     match = false;
+                }
+            } else if (IsIntegerValueType()) {
+                // Full-width integer comparison — no double precision loss
+                // for Qword / large Dword values above 2^53.
+                uint64_t curU = ToUInt64(cur);
+                uint64_t prevU = ToUInt64(prev);
+
+                switch (nextScanType) {
+                case 0: match = (memcmp(cur, targetBuf, vsz) == 0); break;
+                case 1: match = (curU > targetU); break;
+                case 2: match = (curU < targetU); break;
+                case 3: {
+                    uint64_t lo = std::min(targetU, target2U);
+                    uint64_t hi = std::max(targetU, target2U);
+                    match = (curU >= lo && curU <= hi);
+                    break;
+                }
+                case 4: match = (memcmp(cur, prev, vsz) != 0); break;
+                case 5: match = (memcmp(cur, prev, vsz) == 0); break;
+                case 6: match = (curU > prevU); break;
+                case 7: match = (curU < prevU); break;
                 }
             } else {
                 double curVal = ToDouble(cur);
