@@ -82,6 +82,12 @@ bool ProcessManager::OpenTarget(DWORD pid) {
 }
 
 void ProcessManager::CloseTarget() {
+    // NOTE: This closes m_hProcess with no synchronization against background
+    // threads. Read/ReadPartial/Write and the scanner worker consume the raw
+    // handle continuously, so the CALLER must stop all handle-consuming
+    // background work (scanner via Scanner::Reset(), debugger via
+    // Debugger::Detach()) BEFORE calling this, otherwise the handle can be torn
+    // out from under an in-flight read (torn read / handle-reuse race).
     if (m_hProcess) {
         CloseHandle(m_hProcess);
         m_hProcess = nullptr;

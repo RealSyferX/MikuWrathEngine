@@ -47,6 +47,10 @@ App::App() {
 }
 
 App::~App() {
+    // Stop the scanner first: its worker thread reads the process handle
+    // continuously, so it must be cancelled+joined before Detach/CloseTarget
+    // invalidate that handle out from under it. Reset() cancels and joins.
+    m_scanner.Reset();
     m_debugger.Detach();
     m_process.CloseTarget();
 }
@@ -147,10 +151,12 @@ void App::UpdateState() {
             auto procs = m_process.EnumerateProcesses();
             for (auto& p : procs) {
                 if (_stricmp(p.name.c_str(), m_settings.autoAttach) == 0) {
+                    // Cancel+join any in-flight scan before OpenTarget closes
+                    // the old handle, so the worker never reads a stale handle.
+                    m_scanner.Reset();
+                    m_scanner.SetScanRange(0, 0);
                     if (m_process.OpenTarget(p.pid)) {
                         m_disasm.Init(m_process.Is64Bit());
-                        m_scanner.Reset();
-                        m_scanner.SetScanRange(0, 0);
                         m_scanModuleIdx = 0;
                         m_cachedModules = m_process.EnumerateModules();
                         m_cachedRegions.clear();
@@ -379,10 +385,13 @@ void App::RenderProcessBar() {
     bx += btnW + 4;
     if (m_process.IsOpen()) {
         if (UI::Button(m_ui, 13, {bx, y, bx+btnW, y+btnH}, "Close Proc")) {
-            m_debugger.Detach();
-            m_process.CloseTarget();
+            // Tear down the scanner (cancels+joins its worker) BEFORE closing
+            // the target so the worker can never read a handle that CloseTarget
+            // has already invalidated.
             m_scanner.Reset();
             m_scanner.SetScanRange(0, 0);
+            m_debugger.Detach();
+            m_process.CloseTarget();
             m_scanModuleIdx = 0;
             m_results.clear();
             m_cachedResultValues.clear();
@@ -1141,10 +1150,13 @@ void App::RenderProcessPicker() {
             m_selectedProcess = idx;
         }
         if (m_ui.PtInRect(rowRc) && m_ui.mouseDoubleClicked) {
+            // Cancel+join any scan against the previous target's handle BEFORE
+            // OpenTarget closes that handle, avoiding a torn-read race with the
+            // scanner worker.
+            m_scanner.Reset();
+            m_scanner.SetScanRange(0, 0);
             if (m_process.OpenTarget(filtered[idx]->pid)) {
                 m_disasm.Init(m_process.Is64Bit());
-                m_scanner.Reset();
-                m_scanner.SetScanRange(0, 0);
                 m_scanModuleIdx = 0;
                 m_results.clear();
                 // Caches belong to the previous process; invalidate everything.
