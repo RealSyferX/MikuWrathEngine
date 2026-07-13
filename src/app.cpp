@@ -950,11 +950,18 @@ void App::RenderBreakpoints() {
     if (!m_debugger.IsAttached()) {
         if (UI::Button(m_ui, 8001, {8, 35, 120, 57}, "Attach")) {
             m_debugger.SetType((DebuggerType)m_settings.debuggerType);
-            m_debugger.Attach();
+            bool ok = m_debugger.Attach();
+            m_attachFailed = !ok;
+        }
+        if (m_attachFailed) {
+            UI::DrawText(m_ui.g, 240, 38, "Attach failed (check debugger type / privileges)", Theme::CLR_RED());
+        } else if ((DebuggerType)m_settings.debuggerType == DebuggerType::None) {
+            UI::DrawText(m_ui.g, 240, 38, "Select a debugger type in Settings before attaching", Theme::CLR_YELLOW());
         }
     } else {
         if (UI::Button(m_ui, 8002, {8, 35, 120, 57}, "Detach")) {
             m_debugger.Detach();
+            m_attachFailed = false;
         }
         UI::DrawText(m_ui.g, 130, 38, "Attached", Theme::CLR_GREEN());
     }

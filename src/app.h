@@ -121,6 +121,7 @@ private:
     // Debugger
     Debugger m_debugger;
     bool m_showBreakpoints = false;
+    bool m_attachFailed = false;
     // Pending actions for debugger
     bool m_pendingFindAccesses = false;
     bool m_pendingFindWrites = false;

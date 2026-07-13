@@ -165,6 +165,9 @@ void Debugger::ApplyHardwareBreakpointsToAll() {
 bool Debugger::Attach() {
     if (!m_pm || !m_pm->IsOpen()) return false;
     if (m_attached.load()) return false;
+    // A no-op attach would spin a debug thread that busy-loops on
+    // WaitForDebugEvent forever and block for the full m_readyEvent timeout.
+    if (m_type == DebuggerType::None) return false;
 
     m_pid = m_pm->GetPid();
 
