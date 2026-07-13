@@ -197,13 +197,19 @@ bool Debugger::Attach() {
 void Debugger::Detach() {
     if (!m_attached.load()) return;
 
-    // If the target is halted, unblock the debug thread so it can exit
-    if (m_halted.load()) {
-        m_halted.store(false);
-        if (m_resumeEvent) SetEvent(m_resumeEvent);
-    }
+    // Clear halted state early so observers see the target is no longer
+    // stopped at a breakpoint.
+    m_halted.store(false);
 
     m_running.store(false);
+    // Unconditionally wake the debug thread. It may be parked on the wait on
+    // m_resumeEvent after halting at a breakpoint. Relying on m_halted.load()
+    // here races the debug thread, which stores m_halted=true then blocks: if
+    // that store isn't yet visible, Detach would skip SetEvent and join()
+    // would hang forever. m_resumeEvent is manual-reset, so signalling when no
+    // one waits is harmless — the debug thread observes m_running==false on its
+    // next loop iteration and exits cleanly.
+    if (m_resumeEvent) SetEvent(m_resumeEvent);
     if (m_thread.joinable()) m_thread.join();
 
     // Clear all hardware breakpoints
@@ -650,8 +656,18 @@ void Debugger::DebugThread() {
                     ContinueDebugEvent(de.dwProcessId, de.dwThreadId, continueStatus);
 
                     if (m_resumeEvent) {
-                        WaitForSingleObject(m_resumeEvent, INFINITE);
-                        ResetEvent(m_resumeEvent);
+                        // Poll on a short timeout instead of blocking forever
+                        // so a lost/missed signal can never park this thread
+                        // permanently. On a real resume the event (manual-reset)
+                        // is already signalled, so the wait returns immediately;
+                        // we ResetEvent and proceed exactly as before. On detach
+                        // m_running is cleared, so we bail out to the loop head.
+                        while (m_running.load()) {
+                            if (WaitForSingleObject(m_resumeEvent, 200) == WAIT_OBJECT_0) {
+                                ResetEvent(m_resumeEvent);
+                                break;
+                            }
+                        }
                     }
                     continue; // Skip the end-of-loop ContinueDebugEvent
                 }
@@ -691,8 +707,17 @@ void Debugger::DebugThread() {
                         ContinueDebugEvent(de.dwProcessId, de.dwThreadId, DBG_CONTINUE);
 
                         if (m_resumeEvent) {
-                            WaitForSingleObject(m_resumeEvent, INFINITE);
-                            ResetEvent(m_resumeEvent);
+                            // Poll on a short timeout instead of blocking
+                            // forever so a lost/missed signal can never park
+                            // this thread permanently. Behavior on a real
+                            // resume is identical (ResetEvent + proceed); on
+                            // detach m_running is cleared and we bail out.
+                            while (m_running.load()) {
+                                if (WaitForSingleObject(m_resumeEvent, 200) == WAIT_OBJECT_0) {
+                                    ResetEvent(m_resumeEvent);
+                                    break;
+                                }
+                            }
                         }
                         continue; // Skip the end-of-loop ContinueDebugEvent
                     }
@@ -711,8 +736,17 @@ void Debugger::DebugThread() {
                     ContinueDebugEvent(de.dwProcessId, de.dwThreadId, continueStatus);
 
                     if (m_resumeEvent) {
-                        WaitForSingleObject(m_resumeEvent, INFINITE);
-                        ResetEvent(m_resumeEvent);
+                        // Poll on a short timeout instead of blocking forever
+                        // so a lost/missed signal can never park this thread
+                        // permanently. Behavior on a real resume is identical
+                        // (ResetEvent + proceed); on detach m_running is
+                        // cleared and we bail out to the loop head.
+                        while (m_running.load()) {
+                            if (WaitForSingleObject(m_resumeEvent, 200) == WAIT_OBJECT_0) {
+                                ResetEvent(m_resumeEvent);
+                                break;
+                            }
+                        }
                     }
                     continue; // Skip the end-of-loop ContinueDebugEvent
                 }
