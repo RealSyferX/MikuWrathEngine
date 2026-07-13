@@ -151,6 +151,23 @@ A fully **asynchronous** (`std::thread`) scanner with progress bar, live result 
 | 🧹 **Clear All** | Wipe the entire table |
 | 🖱️ **Right-Click Menu** | Browse in Memory Viewer, Copy Address, Copy Value, Delete |
 
+### 🐞 Debugger
+
+A built-in debug engine that attaches to the target and runs its own debug loop on a dedicated thread. Two backends are selectable via the `debugger_type` setting: **Windows** (Windows Debug API — INT3 + hardware breakpoints) or **VEH** (Vectored Exception Handler — hardware breakpoints only). Set to **None** to disable debugging entirely.
+
+| Feature | Description |
+|---------|-------------|
+| 🔴 **Execute Breakpoints** | Break when an instruction at the address executes (`BreakType::Execute`) |
+| ✍️ **Write Breakpoints** | Break when the address is written (`BreakType::Write`) |
+| 👁️ **Access Breakpoints** | Break on read *or* write of the address (`BreakType::Access`) |
+| ⚙️ **Hardware Breakpoints** | Debug-register breakpoints across four slots (**DR0–DR3**), applied per-thread |
+| 🧩 **INT3 Breakpoints** | Software breakpoints via `0xCC` byte patching (Windows backend), with original-byte restore |
+| ⏭️ **Step Into / Step Over / Continue** | Single-step, step over calls (temporary breakpoint), and resume execution |
+| 🧵 **Register Snapshot** | Captures RAX–R15, RIP, and EFLAGS at the point of halt |
+| 🔎 **Find What Accesses** | Set an access watch on an address and collect every instruction that reads or writes it |
+| 📝 **Find What Writes** | Same, but scoped to write accesses only |
+| 📊 **Access Hits Window** | Dedicated results window listing hit instructions with hit counts, disassembly, and thread ID — double-click to jump to the instruction in the Memory Viewer |
+
 ### 🖥️ Memory Viewer
 
 A separate resizable window with a split **disassembly + hex dump** layout.
@@ -185,6 +202,7 @@ Double-click any region or module to jump straight to it in the Memory Viewer. R
 |---------|-------------|
 | 🔗 **Auto-Attach** | Process name to auto-attach on launch (e.g. `MAT.exe`) |
 | 🔤 **Font Size** | Adjustable UI font (6–20 pt), live re-render |
+| 🐞 **Debugger Type** | `debugger_type` — selects the debug backend: `0` = None, `1` = VEH, `2` = Windows (default) |
 | 💾 **Persistence** | Saved to `miku_settings.ini` |
 
 ### ⌨️ Hotkeys
@@ -275,8 +293,12 @@ MikuWrathEngine/
     ├── disassembler.cpp        # cs_open / cs_disasm / FindPreviousInstruction
     ├── memory_viewer.h         # Memory Viewer window (hex + disasm + editor)
     ├── memory_viewer.cpp       # Hex dump, inline nibble editor, NOP/patch/assemble/AOB sig
-    └── address_table.h         # Address table (freeze, save/load .mwt)
-    └── address_table.cpp       # MWT2 file format, frozen-value writer, live value updates
+    ├── address_table.h         # Address table (freeze, save/load .mwt)
+    ├── address_table.cpp       # MWT2 file format, frozen-value writer, live value updates
+    ├── debugger.h              # Debugger interface — breakpoints, DR0-DR3 slots, find accesses/writes
+    ├── debugger.cpp            # Windows/VEH debug loop, INT3 + hardware breakpoints, single-step re-arm
+    ├── access_hits_window.h    # "Find what accesses/writes" results window
+    └── access_hits_window.cpp  # Hit list rendering, per-instruction disasm cache, go-to callback
 ```
 
 ---
