@@ -42,9 +42,12 @@ bool ProcessManager::OpenTarget(DWORD pid) {
     m_hProcess = OpenProcess(
         PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION,
         FALSE, pid);
-    if (!m_hProcess) {
+    if (m_hProcess) {
+        m_writable = true;
+    } else {
         m_hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid);
         if (!m_hProcess) return false;
+        m_writable = false;
     }
 
     m_pid = pid;
@@ -86,6 +89,7 @@ void ProcessManager::CloseTarget() {
     m_pid = 0;
     m_processName.clear();
     m_is64Bit = false;
+    m_writable = false;
     m_modulesDirty = true;
     m_cachedModules.clear();
 }

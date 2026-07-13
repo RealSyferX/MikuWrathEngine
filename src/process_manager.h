@@ -14,6 +14,9 @@ public:
     DWORD GetPid() const { return m_pid; }
     const std::string& GetName() const { return m_processName; }
     bool Is64Bit() const { return m_is64Bit; }
+    // True only when the target was opened with VM_WRITE/VM_OPERATION access.
+    // When false, the handle is a read-only fallback and all Write calls fail.
+    bool CanWrite() const { return m_writable; }
 
     bool Read(uintptr_t addr, void* buf, size_t size) const;
     // Best-effort read: issues a single ReadProcessMemory and returns the
@@ -48,6 +51,7 @@ private:
     DWORD m_pid = 0;
     std::string m_processName;
     bool m_is64Bit = false;
+    bool m_writable = false;
 
     // Lazy module cache for FormatAddress (avoids re-enumerating on every call)
     mutable std::vector<ModuleInfo> m_cachedModules;

@@ -336,6 +336,13 @@ void App::RenderProcessBar() {
             m_process.Is64Bit() ? "x64" : "x86");
         UI::DrawText(m_ui.g, 8, y, info, Theme::CLR_GREEN());
 
+        if (!m_process.CanWrite()) {
+            int iw = 0, ih = 0;
+            UI::MeasureText(m_ui.g, info, nullptr, &iw, &ih);
+            UI::DrawText(m_ui.g, 8 + iw + 8, y, "(read-only - writes disabled)",
+                Theme::CLR_YELLOW());
+        }
+
         std::string path = m_process.GetProcessPath();
         if (!path.empty()) {
             UI::DrawText(m_ui.g, 8, y + 13, path.c_str(), Theme::CLR_DIM());
