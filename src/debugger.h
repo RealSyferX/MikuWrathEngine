@@ -26,7 +26,6 @@ struct AccessHit {
     uintptr_t instruction = 0;  // Address of instruction that triggered
     DWORD threadId = 0;
     int count = 0;
-    char mnemonic[64] = {};  // Disassembled instruction (optional)
 };
 
 struct Breakpoint {
@@ -136,7 +135,6 @@ private:
     bool ClearHwBreakpointInContext(CONTEXT& ctx, int slot);
 
     void EnumerateThreads();
-    uintptr_t GetInstructionPointer(DWORD threadId);
     void RecordAccessHit(DWORD threadId, uintptr_t ip);
     void SingleStepThread(DWORD tid);
     void CaptureContext(DWORD tid);

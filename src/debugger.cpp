@@ -381,23 +381,6 @@ std::vector<Breakpoint> Debugger::GetBreakpoints() const {
     return result;
 }
 
-uintptr_t Debugger::GetInstructionPointer(DWORD threadId) {
-    HANDLE hThread = OpenThread(THREAD_GET_CONTEXT, FALSE, threadId);
-    if (!hThread) return 0;
-    CONTEXT ctx = {};
-    ctx.ContextFlags = CONTEXT_CONTROL;
-    uintptr_t ip = 0;
-    if (GetThreadContext(hThread, &ctx)) {
-#ifdef _WIN64
-        ip = ctx.Rip;
-#else
-        ip = ctx.Eip;
-#endif
-    }
-    CloseHandle(hThread);
-    return ip;
-}
-
 void Debugger::RecordAccessHit(DWORD threadId, uintptr_t ip) {
     std::lock_guard<std::mutex> lock(m_mutex);
     // Check if we already have this instruction
