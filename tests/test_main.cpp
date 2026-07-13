@@ -147,6 +147,49 @@ static void test_parse_value_to_bytes() {
     // String/AOB are not numeric and must be rejected here
     CHECK(!ParseValueToBytes(ValueType::String, "abc", buf, 4, false));
     CHECK(!ParseValueToBytes(ValueType::AOB, "90 90", buf, 4, false));
+
+    // ---- Edge cases ----
+    // Empty string: std::stoul throws std::invalid_argument -> returns false.
+    CHECK(!ParseValueToBytes(ValueType::Byte, "", buf, 1, false));
+    CHECK(!ParseValueToBytes(ValueType::Word, "", buf, 2, false));
+    CHECK(!ParseValueToBytes(ValueType::Dword, "", buf, 4, false));
+    CHECK(!ParseValueToBytes(ValueType::Qword, "", buf, 8, false));
+    // Empty string for float types (stof/stod also throw) -> false.
+    CHECK(!ParseValueToBytes(ValueType::Float32, "", buf, 4, false));
+    CHECK(!ParseValueToBytes(ValueType::Float64, "", buf, 8, false));
+
+    // Whitespace-only: std::stoul finds no digits after skipping ws -> throws
+    // std::invalid_argument -> returns false.
+    CHECK(!ParseValueToBytes(ValueType::Dword, "   ", buf, 4, false));
+    CHECK(!ParseValueToBytes(ValueType::Float32, "   ", buf, 4, false));
+
+    // Leading "0x" prefix with hex=true: base 16 strtoul-style parsing accepts
+    // the "0x" prefix, so "0x1A" -> 0x1A (26).
+    memset(buf, 0, sizeof(buf));
+    CHECK(ParseValueToBytes(ValueType::Dword, "0x1A", buf, 4, true));
+    CHECK(ReadLE(buf, 4) == 0x1Aull);
+    memset(buf, 0, sizeof(buf));
+    CHECK(ParseValueToBytes(ValueType::Word, "0xBEEF", buf, 2, true));
+    CHECK(ReadLE(buf, 2) == 0xBEEFull);
+
+    // Negative numeric input: std::stoul/std::stoull accept a leading '-' and
+    // negate in unsigned arithmetic (matching strtoul/strtoull). "-1" therefore
+    // wraps to the all-ones value of the promoted unsigned long / long long,
+    // which is then truncated to the target width. Pin this CURRENT behavior.
+    // (unsigned long is 32-bit on Windows: stoul("-1") == 0xFFFFFFFF.)
+    memset(buf, 0, sizeof(buf));
+    CHECK(ParseValueToBytes(ValueType::Byte, "-1", buf, 1, false));
+    CHECK(buf[0] == 0xFF);
+    memset(buf, 0, sizeof(buf));
+    CHECK(ParseValueToBytes(ValueType::Word, "-1", buf, 2, false));
+    CHECK(ReadLE(buf, 2) == 0xFFFFull);
+    memset(buf, 0, sizeof(buf));
+    CHECK(ParseValueToBytes(ValueType::Dword, "-1", buf, 4, false));
+    CHECK(ReadLE(buf, 4) == 0xFFFFFFFFull);
+    // Qword uses std::stoull (unsigned long long, 64-bit): "-1" -> all ones.
+    memset(buf, 0, sizeof(buf));
+    CHECK(ParseValueToBytes(ValueType::Qword, "-1", buf, 8, false));
+    CHECK(ReadLE(buf, 8) == 0xFFFFFFFFFFFFFFFFull);
 }
 
 // ============================================================
@@ -190,12 +233,51 @@ static void test_address_parsing() {
     mod = "SENTINEL"; off = 999;
     CHECK(!SplitModuleOffset("00400000", mod, off));
     CHECK(mod == "SENTINEL");   // outputs untouched on false
+
+    // ---- Edge cases ----
+    // Empty module name before '+': find('+')==0, so module is "" and the
+    // rest is parsed as a hex offset. Returns true (a '+' is present).
+    mod = "SENTINEL"; off = 0;
+    CHECK(SplitModuleOffset("+1A2B", mod, off));
+    CHECK(mod == "");           // empty module name
+    CHECK(off == 0x1A2Bull);    // offset parsed as hex
+
+    // Multiple '+': split happens on the FIRST '+' (std::string::find).
+    // offsetStr becomes "1A+2B"; strtoull(base 16) parses the leading hex
+    // run "1A" and stops at the second '+', yielding 0x1A.
+    mod.clear(); off = 0;
+    CHECK(SplitModuleOffset("game.exe+1A+2B", mod, off));
+    CHECK(mod == "game.exe");   // everything before the first '+'
+    CHECK(off == 0x1Aull);      // strtoull stops at the second '+'
+
+    // Trailing '+' with no offset: offsetStr is empty, strtoull("") -> 0.
+    // Still returns true because a '+' is present.
+    mod.clear(); off = 999;
+    CHECK(SplitModuleOffset("game.exe+", mod, off));
+    CHECK(mod == "game.exe");
+    CHECK(off == 0ull);         // empty offset -> 0
+}
+
+// ============================================================
+// ParsePlainHexAddress edge cases
+// ============================================================
+static void test_plain_hex_edge() {
+    // Empty string: strtoull("") has no digits to convert -> returns 0.
+    CHECK(ParsePlainHexAddress("") == 0ull);
+    // Non-hex garbage: strtoull("zzz", base 16) converts nothing -> returns 0.
+    CHECK(ParsePlainHexAddress("zzz") == 0ull);
+    // Partial hex: leading hex run is consumed until the first non-hex char.
+    // "1Fzz" -> 0x1F (strtoull stops at 'z').
+    CHECK(ParsePlainHexAddress("1Fzz") == 0x1Full);
+    // Whitespace-only -> no digits -> 0.
+    CHECK(ParsePlainHexAddress("   ") == 0ull);
 }
 
 int main() {
     test_parse_aob();
     test_parse_value_to_bytes();
     test_address_parsing();
+    test_plain_hex_edge();
 
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     if (g_failures == 0) {
