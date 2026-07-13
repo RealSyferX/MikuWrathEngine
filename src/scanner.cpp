@@ -230,9 +230,20 @@ void Scanner::NewScanWorker(ValueType type, int scanType,
                 if (!m_scanning.load(std::memory_order_relaxed)) break;
                 RegionSnapshot snap;
                 snap.base = r.base + ck.offset;
-                snap.emitLen = ck.emitLen;
                 snap.data.resize(ck.readLen);
-                if (m_pm->Read(snap.base, snap.data.data(), ck.readLen)) {
+                // Tolerate a partial read (e.g. a committed chunk whose tail
+                // borders a guard page). Keep only the readable prefix so its
+                // addresses are recovered instead of dropping the whole chunk.
+                size_t got = m_pm->ReadPartial(snap.base, snap.data.data(), ck.readLen);
+                if (got >= vsz) {
+                    snap.data.resize(got);
+                    // Clamp emitLen to the readable prefix so the snapshot
+                    // count math and NextScanWorker stay consistent. A fully
+                    // readable chunk (got == ck.readLen) yields ck.emitLen
+                    // unchanged, since ComputeScanChunks already ensures
+                    // ck.emitLen <= readable.
+                    size_t readable = got - vsz + 1;
+                    snap.emitLen = std::min(ck.emitLen, readable);
                     localSnap.push_back(std::move(snap));
                 }
             }
@@ -312,12 +323,18 @@ void Scanner::NewScanWorker(ValueType type, int scanType,
             for (auto& ck : chunkList) {
                 uintptr_t chunkBase = r.base + ck.offset;
                 data.resize(ck.readLen);
-                if (!m_pm->Read(chunkBase, data.data(), ck.readLen)) {
-                    continue; // chunk unreadable; skip but keep scanning others
+                // Tolerate a partial read: recover the readable prefix instead
+                // of skipping the whole chunk. Do NOT zero-fill the unread tail
+                // — zeros would create spurious matches for a target value of 0.
+                size_t got = m_pm->ReadPartial(chunkBase, data.data(), ck.readLen);
+                if (got < elemLen) {
+                    continue; // nothing fully readable; keep scanning others
                 }
 
-                // Only emit within the non-overlapping head of this chunk.
-                size_t readable = (ck.readLen >= elemLen) ? ck.readLen - elemLen + 1 : 0;
+                // Only emit within the non-overlapping head of this chunk, and
+                // only over offsets that were actually read. A fully-readable
+                // chunk (got == ck.readLen) leaves this identical to before.
+                size_t readable = got - elemLen + 1;
                 size_t scanLen = std::min(ck.emitLen, readable);
 
                 for (size_t off = 0; off < scanLen; off++) {
@@ -437,7 +454,12 @@ bool Scanner::NextScanWorker(int nextScanType,
         for (size_t si = 0; si < totalSnaps; si++) {
             auto& snap = m_snapshot[si];
             std::vector<uint8_t> current(snap.data.size());
-            if (!m_pm->Read(snap.base, current.data(), current.size())) {
+            // Tolerate a partial read of the live bytes: derive the scan span
+            // from what was actually read rather than the buffer size, so a
+            // chunk that now borders a guard page still contributes its
+            // readable prefix instead of being skipped entirely.
+            size_t got = m_pm->ReadPartial(snap.base, current.data(), current.size());
+            if (got < vsz) {
                 m_progress = (float)(si + 1) / totalSnaps;
                 continue;
             }
@@ -446,8 +468,9 @@ bool Scanner::NextScanWorker(int nextScanType,
             // value straddling the boundary stays readable; only emit the
             // non-overlapping head (emitLen offsets) so each absolute address
             // is produced exactly once. emitLen == 0 => legacy non-chunked
-            // snapshot: emit every fully-readable offset.
-            size_t readable = (current.size() >= vsz) ? current.size() - vsz + 1 : 0;
+            // snapshot: emit every fully-readable offset. A full read
+            // (got == current.size()) leaves readable identical to before.
+            size_t readable = got - vsz + 1;
             size_t scanLen = (snap.emitLen > 0) ? std::min(snap.emitLen, readable)
                                                 : readable;
             for (size_t off = 0; off < scanLen; off++) {
