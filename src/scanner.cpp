@@ -482,7 +482,12 @@ bool Scanner::NextScanWorker(int nextScanType,
                             }
                         }
                     } else if (m_valueType == ValueType::String) {
-                        match = (memcmp(cur, m_searchString.data(), m_searchString.size()) == 0);
+                        // m_searchString is fixed from the first scan so it is
+                        // already bounded by vsz; clamp defensively for symmetry
+                        // with the explicit-results path.
+                        size_t cmpLen = std::min(m_searchString.size(), vsz);
+                        match = (m_searchString.size() <= vsz &&
+                                 memcmp(cur, m_searchString.data(), cmpLen) == 0);
                     } else {
                         match = (memcmp(cur, targetBuf, vsz) == 0);
                     }
@@ -589,7 +594,13 @@ bool Scanner::NextScanWorker(int nextScanType,
 
             if (m_valueType == ValueType::String) {
                 if (nextScanType == 0) {
-                    match = (memcmp(cur, valueStr.data(), valueStr.size()) == 0);
+                    // Each read slot is only vsz bytes wide (vsz was fixed by
+                    // the first scan's search-string length). A next-scan input
+                    // longer than vsz can never match a vsz-byte slot, so reject
+                    // it instead of reading past the end of readBuf.
+                    size_t cmpLen = std::min(valueStr.size(), vsz);
+                    match = (valueStr.size() <= vsz &&
+                             memcmp(cur, valueStr.data(), cmpLen) == 0);
                 } else {
                     match = false;
                 }
