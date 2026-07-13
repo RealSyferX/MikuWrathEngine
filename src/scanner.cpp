@@ -566,25 +566,13 @@ bool Scanner::NextScanWorker(int nextScanType,
     for (size_t base = 0; base < total; base += batchSize) {
         size_t count = std::min(batchSize, total - base);
 
-        // Batch read: try to read all at once
-        uintptr_t startAddr = currentResults[base];
-        bool allRead = true;
-
+        // Read each address individually; zero-fill any slot whose read
+        // fails so downstream comparisons are deterministic instead of
+        // matching against stale bytes left over from a prior iteration.
         for (size_t i = 0; i < count; i++) {
             uintptr_t addr = currentResults[base + i];
             if (!m_pm->Read(addr, readBuf.data() + i * vsz, vsz)) {
-                allRead = false;
-                break;
-            }
-        }
-
-        if (!allRead) {
-            // Fallback: read individually
-            for (size_t i = 0; i < count; i++) {
-                uintptr_t addr = currentResults[base + i];
-                if (!m_pm->Read(addr, readBuf.data() + i * vsz, vsz)) {
-                    continue;
-                }
+                memset(readBuf.data() + i * vsz, 0, vsz);
             }
         }
 
