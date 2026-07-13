@@ -37,6 +37,40 @@ inline bool WriteValueString(const ProcessManager& pm, uintptr_t addr, ValueType
         case ValueType::Float32: { float v = std::stof(str); return pm.Write(addr, &v, 4); }
         case ValueType::Float64: { double v = std::stod(str); return pm.Write(addr, &v, 8); }
         case ValueType::String: { return pm.Write(addr, str, strlen(str) + 1); }
+        case ValueType::AOB: {
+            // Parse space-separated hex tokens (matching ReadValueString's "%02X " format).
+            // "??"/"?" tokens are wildcards that leave the existing byte untouched.
+            std::vector<uint8_t> bytes;
+            std::vector<bool> wildcard;
+            bool anyWildcard = false;
+            const char* p = str;
+            while (*p) {
+                while (*p == ' ' || *p == '\t') p++;
+                if (!*p) break;
+                const char* start = p;
+                while (*p && *p != ' ' && *p != '\t') p++;
+                std::string tok(start, p - start);
+                if (tok == "??" || tok == "?") {
+                    bytes.push_back(0);
+                    wildcard.push_back(true);
+                    anyWildcard = true;
+                } else {
+                    size_t consumed = 0;
+                    unsigned long v = std::stoul(tok, &consumed, 16);
+                    if (consumed != tok.size() || v > 0xFF) return false;
+                    bytes.push_back((uint8_t)v);
+                    wildcard.push_back(false);
+                }
+            }
+            if (bytes.empty()) return false;
+            if (!anyWildcard) return pm.Write(addr, bytes.data(), bytes.size());
+            // Overlay only non-wildcard positions onto the current bytes.
+            std::vector<uint8_t> cur(bytes.size());
+            if (!pm.Read(addr, cur.data(), cur.size())) return false;
+            for (size_t i = 0; i < bytes.size(); i++)
+                if (!wildcard[i]) cur[i] = bytes[i];
+            return pm.Write(addr, cur.data(), cur.size());
+        }
         default: return false;
         }
     } catch (...) { return false; }
