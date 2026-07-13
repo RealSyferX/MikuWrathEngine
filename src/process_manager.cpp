@@ -266,6 +266,7 @@ uintptr_t ProcessManager::ParseAddressString(const std::string& str) const {
     uintptr_t offset = 0;
     if (SplitModuleOffset(str, modName, offset)) {
         uintptr_t base = GetModuleBase(modName.c_str());
+        if (offset > UINTPTR_MAX - base) return UINTPTR_MAX;  // saturate on wrap
         return base + offset;
     }
     // Plain hex address (accept optional 0x prefix)
