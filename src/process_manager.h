@@ -35,6 +35,10 @@ public:
     uintptr_t ParseAddressString(const std::string& str) const;
 
 private:
+    // Enumerate all module handles for the target, growing the buffer until it
+    // fits so processes with more than a fixed count are not silently truncated.
+    bool EnumModules(std::vector<HMODULE>& out) const;
+
     HANDLE m_hProcess = nullptr;
     DWORD m_pid = 0;
     std::string m_processName;

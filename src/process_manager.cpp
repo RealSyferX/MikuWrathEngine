@@ -144,21 +144,51 @@ std::string ProcessManager::GetProcessPath() const {
     return "";
 }
 
+bool ProcessManager::EnumModules(std::vector<HMODULE>& out) const {
+    out.clear();
+    if (!m_hProcess) return false;
+
+    // First query for the required byte count. Then size the buffer and fill it.
+    // The module list can grow between the two calls (modules loaded on another
+    // thread), so retry until the buffer is large enough to hold everything.
+    DWORD needed = 0;
+    if (!EnumProcessModulesEx(m_hProcess, nullptr, 0, &needed, LIST_MODULES_ALL))
+        return false;
+
+    for (int attempt = 0; attempt < 8 && needed > 0; attempt++) {
+        out.resize(needed / sizeof(HMODULE));
+        DWORD bufSize = (DWORD)(out.size() * sizeof(HMODULE));
+        DWORD got = 0;
+        if (!EnumProcessModulesEx(m_hProcess, out.data(), bufSize, &got, LIST_MODULES_ALL)) {
+            out.clear();
+            return false;
+        }
+        if (got <= bufSize) {
+            // Everything fit; trim to the actual number of handles returned.
+            out.resize(got / sizeof(HMODULE));
+            return true;
+        }
+        // The list grew; loop again with the larger required size.
+        needed = got;
+    }
+
+    out.clear();
+    return false;
+}
+
 uintptr_t ProcessManager::GetModuleBase(const char* moduleName) const {
     if (!m_hProcess) return 0;
-    HMODULE mods[1024];
-    DWORD needed = 0;
-    if (!EnumProcessModulesEx(m_hProcess, mods, sizeof(mods), &needed, LIST_MODULES_ALL))
-        return 0;
-    int count = needed / sizeof(HMODULE);
-    for (int i = 0; i < count; i++) {
+    std::vector<HMODULE> mods;
+    if (!EnumModules(mods)) return 0;
+
+    for (HMODULE mod : mods) {
         wchar_t wname[MAX_PATH];
-        if (GetModuleBaseNameW(m_hProcess, mods[i], wname, MAX_PATH)) {
+        if (GetModuleBaseNameW(m_hProcess, mod, wname, MAX_PATH)) {
             char nameBuf[MAX_PATH];
             WideCharToMultiByte(CP_UTF8, 0, wname, -1, nameBuf, MAX_PATH, nullptr, nullptr);
             if (!moduleName || _stricmp(nameBuf, moduleName) == 0) {
                 MODULEINFO mi;
-                if (GetModuleInformation(m_hProcess, mods[i], &mi, sizeof(mi))) {
+                if (GetModuleInformation(m_hProcess, mod, &mi, sizeof(mi))) {
                     return (uintptr_t)mi.lpBaseOfDll;
                 }
             }
@@ -171,17 +201,14 @@ std::vector<ProcessManager::ModuleInfo> ProcessManager::EnumerateModules() const
     std::vector<ModuleInfo> mods;
     if (!m_hProcess) return mods;
 
-    HMODULE hMods[1024];
-    DWORD needed = 0;
-    if (!EnumProcessModulesEx(m_hProcess, hMods, sizeof(hMods), &needed, LIST_MODULES_ALL))
-        return mods;
+    std::vector<HMODULE> hMods;
+    if (!EnumModules(hMods)) return mods;
 
-    int count = needed / sizeof(HMODULE);
-    for (int i = 0; i < count; i++) {
+    for (HMODULE mod : hMods) {
         wchar_t wname[MAX_PATH];
-        if (GetModuleBaseNameW(m_hProcess, hMods[i], wname, MAX_PATH)) {
+        if (GetModuleBaseNameW(m_hProcess, mod, wname, MAX_PATH)) {
             MODULEINFO mi;
-            if (GetModuleInformation(m_hProcess, hMods[i], &mi, sizeof(mi))) {
+            if (GetModuleInformation(m_hProcess, mod, &mi, sizeof(mi))) {
                 ModuleInfo info;
                 info.base = (uintptr_t)mi.lpBaseOfDll;
                 info.size = mi.SizeOfImage;
