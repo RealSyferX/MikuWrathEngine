@@ -35,7 +35,7 @@ void AddressTable::UpdateFrozen(const ProcessManager& pm, float dt) {
     if (m_freezeTimer < 0.01f) return;
     m_freezeTimer = 0.0f;
     for (auto& e : m_entries) {
-        if (e.frozen && e.editValue[0]) {
+        if (e.frozen && e.editValue[0] && !e.isEditing) {
             ::WriteValueString(pm, e.address, e.type, e.editValue);
         }
     }
