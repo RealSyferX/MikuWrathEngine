@@ -9,11 +9,13 @@
 //   - ParseValueToBytes           (parse_utils.h — backs Scanner::ParseAndWrite)
 //   - SplitModuleOffset /
 //     ParsePlainHexAddress        (parse_utils.h — backs ParseAddressString)
+//   - Settings::Load / Save       (settings.h — INI parse, clamping, CR/LF strip)
 // ============================================================
 #include "scanner.h"
 #include "parse_utils.h"
 #include "scan_chunk.h"
 #include "types.h"
+#include "settings.h"
 
 #include <cstdio>
 #include <cstdint>
@@ -421,12 +423,128 @@ static void test_compute_scan_chunks() {
     verify_chunk_coverage(16, 16, 16);  // element == chunk == region
 }
 
+// ============================================================
+// Settings::Load / Save (settings.h)
+//
+// Pure, header-only INI-style persistence: auto_attach (string, CR/LF
+// stripped), font_size (atoi, clamped 6..20), debugger_type (atoi,
+// clamped 0..2). Defaults: autoAttach="", fontSize=9, debuggerType=2.
+// ============================================================
+
+// Write raw bytes to a file (used to craft malformed / hand-authored INI).
+static void write_file(const char* path, const char* contents) {
+    FILE* f = std::fopen(path, "wb");
+    if (f) {
+        std::fwrite(contents, 1, std::strlen(contents), f);
+        std::fclose(f);
+    }
+}
+
+static void test_settings() {
+    const char* kPath = "mwe_test_settings.ini";
+    const char* kMissing = "nonexistent_xyz.ini";
+
+    // Make sure a stale file from a previous run can't taint the missing-file
+    // check below.
+    std::remove(kMissing);
+
+    // ---- Defaults ----
+    // Confirm the documented defaults before anything else so the missing-file
+    // assertions below rest on verified ground truth.
+    {
+        Settings s;
+        CHECK(s.autoAttach[0] == '\0');   // empty by default
+        CHECK(s.fontSize == 9);
+        CHECK(s.debuggerType == 2);
+    }
+
+    // ---- Round-trip Save -> Load ----
+    {
+        Settings out;
+        std::strcpy(out.autoAttach, "game.exe");
+        out.fontSize = 14;
+        out.debuggerType = 1;
+        out.Save(kPath);
+
+        Settings in;
+        in.Load(kPath);
+        CHECK(std::strcmp(in.autoAttach, "game.exe") == 0);
+        CHECK(in.fontSize == 14);
+        CHECK(in.debuggerType == 1);
+    }
+
+    // ---- Missing file leaves defaults untouched ----
+    {
+        Settings s;
+        s.Load(kMissing);   // fopen fails -> early return, no mutation
+        CHECK(s.autoAttach[0] == '\0');
+        CHECK(s.fontSize == 9);
+        CHECK(s.debuggerType == 2);
+    }
+
+    // ---- Clamping: font_size below the floor -> 6 ----
+    {
+        write_file(kPath, "font_size=1\n");
+        Settings s;
+        s.Load(kPath);
+        CHECK(s.fontSize == 6);
+    }
+
+    // ---- Clamping: font_size above the ceiling -> 20 ----
+    {
+        write_file(kPath, "font_size=99\n");
+        Settings s;
+        s.Load(kPath);
+        CHECK(s.fontSize == 20);
+    }
+
+    // ---- Clamping: debugger_type below 0 -> 0 ----
+    {
+        write_file(kPath, "debugger_type=-5\n");
+        Settings s;
+        s.Load(kPath);
+        CHECK(s.debuggerType == 0);
+    }
+
+    // ---- Clamping: debugger_type above 2 -> 2 ----
+    {
+        write_file(kPath, "debugger_type=7\n");
+        Settings s;
+        s.Load(kPath);
+        CHECK(s.debuggerType == 2);
+    }
+
+    // ---- Malformed font_size: atoi("abc")==0 -> clamped up to floor 6 ----
+    {
+        write_file(kPath, "font_size=abc\n");
+        Settings s;
+        s.Load(kPath);
+        CHECK(s.fontSize == 6);
+    }
+
+    // ---- CR/LF stripping on auto_attach ----
+    // A CRLF-terminated value must load with no trailing control characters.
+    {
+        write_file(kPath, "auto_attach=test.exe\r\n");
+        Settings s;
+        s.Load(kPath);
+        CHECK(std::strcmp(s.autoAttach, "test.exe") == 0);
+        size_t n = std::strlen(s.autoAttach);
+        CHECK(n == 8);                       // exactly "test.exe"
+        CHECK(s.autoAttach[n] == '\0');      // NUL-terminated at the boundary
+    }
+
+    // Clean up the temp file.
+    std::remove(kPath);
+}
+
 int main() {
     test_parse_aob();
     test_parse_value_to_bytes();
     test_address_parsing();
     test_plain_hex_edge();
     test_compute_scan_chunks();
+    test_settings();
 
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     if (g_failures == 0) {
