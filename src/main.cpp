@@ -1,5 +1,6 @@
 #include "app.h"
 #include "ui.h"
+#include "privilege_utils.h"
 #include <gdiplus.h>
 #include <dwmapi.h>
 #include <cstdio>
@@ -156,6 +157,10 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 }
 
 int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
+    // Enable SE_DEBUG_NAME so OpenProcess/DebugActiveProcess can target
+    // elevated or protected processes.  Fails gracefully when not elevated.
+    EnableDebugPrivilege();
+
     // GDI+ startup
     ULONG_PTR gdiplusToken;
     Gdiplus::GdiplusStartupInput gdiplusStartup;
