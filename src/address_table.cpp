@@ -56,10 +56,21 @@ void AddressTable::UpdateValues(const ProcessManager& pm, int scrollPos, int vis
 void AddressTable::Save(const char* path) const {
     std::ofstream f(path);
     if (!f) return;
+    // MWT2 uses tab-separated fields terminated by newlines and has no escaping,
+    // so any embedded tab/carriage-return/newline in a text field would desync
+    // the record and cause Load to mis-parse every following field. Replace those
+    // control characters with spaces on a local copy before writing.
+    auto sanitize = [](const char* src) {
+        std::string s(src);
+        for (char& c : s) {
+            if (c == '\t' || c == '\r' || c == '\n') c = ' ';
+        }
+        return s;
+    };
     f << "MWT2\t1\n";
     for (auto& e : m_entries) {
         f << (int)e.type << "\t" << e.address << "\t" << e.frozen << "\t"
-          << e.editValue << "\t" << e.description << "\n";
+          << sanitize(e.editValue) << "\t" << sanitize(e.description) << "\n";
     }
 }
 
