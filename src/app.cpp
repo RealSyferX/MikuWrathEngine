@@ -837,19 +837,10 @@ void App::RenderAddDialog() {
     // visible even when the dialog height is clamped.
     int btnY = dlg.bottom - 30;
     if (UI::Button(m_ui, 6003, {dlg.right - 180, btnY, dlg.right - 100, btnY + 22}, "OK")) {
-        uintptr_t addr = 0;
-        std::string addrStr = m_addAddrBuf;
-        // Check for module+offset
-        size_t plusPos = addrStr.find('+');
-        if (plusPos != std::string::npos) {
-            std::string modName = addrStr.substr(0, plusPos);
-            std::string offsetStr = addrStr.substr(plusPos + 1);
-            uintptr_t base = m_process.GetModuleBase(modName.c_str());
-            uintptr_t offset = strtoull(offsetStr.c_str(), nullptr, 0);
-            addr = base + offset;
-        } else {
-            addr = strtoull(addrStr.c_str(), nullptr, 16);
-        }
+        // Route through the canonical parser so module+offset offsets are
+        // interpreted as hex (Cheat Engine convention), matching the Memory
+        // Viewer's Go-To and ProcessManager::ParseAddressString everywhere else.
+        uintptr_t addr = m_process.ParseAddressString(m_addAddrBuf);
         m_table.Add(addr, (ValueType)m_addTypeIdx, m_addDescBuf);
         m_showAddDialog = false;
         m_addAddrBuf[0] = '\0';
