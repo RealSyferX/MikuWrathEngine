@@ -1,4 +1,5 @@
 #include "process_manager.h"
+#include "parse_utils.h"
 #include <tlhelp32.h>
 #include <psapi.h>
 #include <algorithm>
@@ -241,20 +242,15 @@ std::string ProcessManager::FormatAddress(uintptr_t addr) const {
 }
 
 uintptr_t ProcessManager::ParseAddressString(const std::string& str) const {
-    size_t plus = str.find('+');
-    if (plus != std::string::npos) {
-        std::string modName = str.substr(0, plus);
-        std::string offsetStr = str.substr(plus + 1);
-        // Trim trailing whitespace from module name
-        while (!modName.empty() && isspace((unsigned char)modName.back()))
-            modName.pop_back();
-        // Trim leading whitespace from offset
-        size_t start = offsetStr.find_first_not_of(" \t");
-        if (start != std::string::npos) offsetStr = offsetStr.substr(start);
+    // The string-trimming and offset math live in a pure helper so they can be
+    // unit-tested without a live process; only the module-base lookup here
+    // depends on an open target.
+    std::string modName;
+    uintptr_t offset = 0;
+    if (SplitModuleOffset(str, modName, offset)) {
         uintptr_t base = GetModuleBase(modName.c_str());
-        uintptr_t offset = (uintptr_t)strtoull(offsetStr.c_str(), nullptr, 0);
         return base + offset;
     }
     // Plain hex address (accept optional 0x prefix)
-    return (uintptr_t)strtoull(str.c_str(), nullptr, 16);
+    return ParsePlainHexAddress(str);
 }

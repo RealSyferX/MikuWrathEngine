@@ -1,5 +1,6 @@
 #include "scanner.h"
 #include "value_utils.h"
+#include "parse_utils.h"
 #include <sstream>
 #include <cstring>
 #include <cmath>
@@ -102,36 +103,9 @@ std::string Scanner::FormatValue(const uint8_t* data) const {
 }
 
 bool Scanner::ParseAndWrite(const std::string& str, uint8_t* out, size_t size, bool hex) const {
-    int base = hex ? 16 : 10;
-    try {
-        switch (m_valueType) {
-        case ValueType::Byte: {
-            auto v = (uint8_t)std::stoul(str, nullptr, base);
-            memcpy(out, &v, 1); return true;
-        }
-        case ValueType::Word: {
-            auto v = (uint16_t)std::stoul(str, nullptr, base);
-            memcpy(out, &v, 2); return true;
-        }
-        case ValueType::Dword: {
-            auto v = (uint32_t)std::stoul(str, nullptr, base);
-            memcpy(out, &v, 4); return true;
-        }
-        case ValueType::Qword: {
-            auto v = (uint64_t)std::stoull(str, nullptr, base);
-            memcpy(out, &v, 8); return true;
-        }
-        case ValueType::Float32: {
-            float v = std::stof(str);
-            memcpy(out, &v, 4); return true;
-        }
-        case ValueType::Float64: {
-            double v = std::stod(str);
-            memcpy(out, &v, 8); return true;
-        }
-        default: return false;
-        }
-    } catch (...) { return false; }
+    // Delegate to the pure, process-independent helper so the parsing edge
+    // cases (overflow truncation, hex/decimal, float) are unit-testable.
+    return ParseValueToBytes(m_valueType, str, out, size, hex);
 }
 
 // ============================================================

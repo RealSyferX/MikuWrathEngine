@@ -50,3 +50,24 @@ target_link_libraries(MikuWrathEngine PRIVATE
     capstone
     Comdlg32
 )
+
+# ============================================================
+# Unit tests for pure logic (AOB parsing, value round-trip, address parsing).
+# Enabled by default; configure with -DBUILD_TESTS=OFF to skip.
+# ============================================================
+option(BUILD_TESTS "Build the mwe_tests unit test target" ON)
+if(BUILD_TESTS)
+    enable_testing()
+    add_executable(mwe_tests
+        tests/test_main.cpp
+        src/scanner.cpp          # provides Scanner::ParseAOB
+        src/process_manager.cpp  # provides ProcessManager symbols pulled in by scanner
+    )
+    target_include_directories(mwe_tests PRIVATE
+        src
+        ${capstone_SOURCE_DIR}/include
+    )
+    # scanner.cpp/process_manager.cpp reference Win32 (psapi) symbols.
+    target_link_libraries(mwe_tests PRIVATE psapi user32)
+    add_test(NAME mwe_tests COMMAND mwe_tests)
+endif()
