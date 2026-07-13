@@ -286,8 +286,9 @@ void MemoryViewer::DoPatch(uintptr_t addr, const char* hexStr) {
     std::istringstream iss(hexStr);
     std::string tok;
     while (iss >> tok) {
+        if (bytes.size() >= m_patchMaxLen) break;   // enforce advertised cap
         uint8_t b;
-        if (!ParseHexByte(tok, b)) return; // invalid token: abort, no partial write
+        if (!ParseHexByte(tok, b)) return;           // invalid token: abort, no partial write
         bytes.push_back(b);
     }
     if (!bytes.empty()) {
