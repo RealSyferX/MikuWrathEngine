@@ -269,13 +269,26 @@ void MemoryViewer::DoNOP(uintptr_t addr, size_t len) {
     RefreshDisasm();
 }
 
+// Parse a single hex byte token. Returns true and fills 'out' only if the
+// entire token is valid hex and fits in a byte (matches AOB validation).
+static bool ParseHexByte(const std::string& tok, uint8_t& out) {
+    if (tok.empty()) return false;
+    char* end = nullptr;
+    unsigned long v = strtoul(tok.c_str(), &end, 16);
+    if (end != tok.c_str() + tok.size() || v > 0xFF) return false;
+    out = (uint8_t)v;
+    return true;
+}
+
 void MemoryViewer::DoPatch(uintptr_t addr, const char* hexStr) {
     if (!m_pm || !m_pm->IsOpen()) return;
     std::vector<uint8_t> bytes;
     std::istringstream iss(hexStr);
     std::string tok;
     while (iss >> tok) {
-        bytes.push_back((uint8_t)strtoul(tok.c_str(), nullptr, 16));
+        uint8_t b;
+        if (!ParseHexByte(tok, b)) return; // invalid token: abort, no partial write
+        bytes.push_back(b);
     }
     if (!bytes.empty()) {
         m_pm->Write(addr, bytes.data(), bytes.size());
@@ -1055,10 +1068,19 @@ void MemoryViewer::RenderAsmPopup(Gdiplus::Graphics* g, RECT& rc) {
         std::vector<uint8_t> bytes;
         std::istringstream iss(m_asmBuf);
         std::string tok;
+        bool badToken = false;
         while (iss >> tok) {
-            bytes.push_back((uint8_t)strtoul(tok.c_str(), nullptr, 16));
+            uint8_t b;
+            if (!ParseHexByte(tok, b)) {
+                snprintf(m_asmError, sizeof(m_asmError), "Invalid hex byte: %s", tok.c_str());
+                badToken = true;
+                break;
+            }
+            bytes.push_back(b);
         }
-        if (bytes.empty()) {
+        if (badToken) {
+            // m_asmError already set; do not write
+        } else if (bytes.empty()) {
             snprintf(m_asmError, sizeof(m_asmError), "No valid bytes entered");
         } else if (!m_pm || !m_pm->IsOpen()) {
             snprintf(m_asmError, sizeof(m_asmError), "No process open");
