@@ -59,10 +59,17 @@ private:
     std::atomic<bool> m_firstScan{true};
     ValueType m_valueType = ValueType::Dword;
 
-    // For changed/unchanged: snapshot of previous values
+    // For changed/unchanged: snapshot of previous values.
+    // Large regions are stored as several overlapping chunks (each <= kChunk
+    // bytes). data overlaps the next chunk by (m_valueSize - 1) bytes so a
+    // value straddling a chunk boundary is still fully readable; emitLen is
+    // the number of leading offsets this chunk is responsible for emitting so
+    // the same absolute address is never produced twice. emitLen == 0 means
+    // "emit all readable offsets" (a non-chunked / legacy snapshot).
     struct RegionSnapshot {
         uintptr_t base = 0;
         std::vector<uint8_t> data;
+        size_t emitLen = 0;
     };
     std::vector<RegionSnapshot> m_snapshot;
     std::atomic<bool> m_hasSnapshot{false};

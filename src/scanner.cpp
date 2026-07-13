@@ -1,10 +1,16 @@
 #include "scanner.h"
 #include "value_utils.h"
 #include "parse_utils.h"
+#include "scan_chunk.h"
 #include <sstream>
 #include <cstring>
 #include <cmath>
 #include <algorithm>
+
+// Read large regions in bounded chunks instead of one giant allocation.
+// Games routinely commit heaps > 256 MB; scanning them in 64 MB chunks keeps
+// peak memory bounded while still covering every byte.
+static const size_t kChunk = 64 * 1024 * 1024;
 
 Scanner::~Scanner() {
     m_scanning.store(false, std::memory_order_relaxed);
@@ -212,20 +218,35 @@ void Scanner::NewScanWorker(ValueType type, int scanType,
         std::vector<RegionSnapshot> localSnap;
         for (size_t ri = 0; ri < totalRegions; ri++) {
             auto& r = regions[ri];
-            if (r.size == 0 || r.size > 256 * 1024 * 1024) continue; // skip huge regions
-            RegionSnapshot snap;
-            snap.base = r.base;
-            snap.data.resize(r.size);
-            if (m_pm->Read(r.base, snap.data.data(), r.size)) {
-                localSnap.push_back(std::move(snap));
+            if (r.size == 0 || vsz == 0) continue;
+
+            // Split the region into chunks of <= kChunk bytes. Each chunk is
+            // stored as its own snapshot entry; overlapping by (vsz - 1) bytes
+            // keeps values that straddle a chunk edge fully readable, and the
+            // per-chunk emitLen prevents NextScanWorker from emitting the same
+            // absolute address twice. Small regions yield a single chunk.
+            auto chunkList = ComputeScanChunks(r.size, kChunk, vsz);
+            for (auto& ck : chunkList) {
+                if (!m_scanning.load(std::memory_order_relaxed)) break;
+                RegionSnapshot snap;
+                snap.base = r.base + ck.offset;
+                snap.emitLen = ck.emitLen;
+                snap.data.resize(ck.readLen);
+                if (m_pm->Read(snap.base, snap.data.data(), ck.readLen)) {
+                    localSnap.push_back(std::move(snap));
+                }
             }
             m_progress = (float)(ri + 1) / totalRegions * 0.5f;
+            if (!m_scanning.load(std::memory_order_relaxed)) break;
         }
 
-        // Compute cached result count for snapshot mode
+        // Compute cached result count for snapshot mode. Use the per-chunk
+        // emit span so overlapping chunks are not double-counted.
         size_t snapCount = 0;
         for (auto& snap : localSnap) {
-            if (snap.data.size() >= vsz)
+            if (snap.emitLen > 0)
+                snapCount += snap.emitLen;
+            else if (snap.data.size() >= vsz)
                 snapCount += snap.data.size() - vsz + 1;
         }
         m_cachedResultCount.store(snapCount, std::memory_order_relaxed);
@@ -272,78 +293,91 @@ void Scanner::NewScanWorker(ValueType type, int scanType,
         size_t patternLen = (type == ValueType::AOB) ? m_aobPattern.bytes.size() : vsz;
         size_t strLen = (type == ValueType::String) ? m_searchString.size() : 0;
 
+        // patternLen / strLen / vsz are all the comparison element length, so
+        // a single element width drives the chunk overlap.
+        size_t elemLen = patternLen; // == vsz for numeric, == strLen for String
+
         for (size_t ri = 0; ri < totalRegions; ri++) {
             auto& r = regions[ri];
-            if (r.size == 0 || r.size > 256 * 1024 * 1024) continue;
+            if (r.size == 0 || elemLen == 0) continue;
 
-            std::vector<uint8_t> data(r.size);
-            if (!m_pm->Read(r.base, data.data(), r.size)) {
-                m_progress = (float)(ri + 1) / totalRegions;
-                continue;
-            }
+            // Read the region in bounded chunks so committed heaps larger than
+            // a few hundred MB are still fully scanned. Consecutive chunks
+            // overlap by (elemLen - 1) bytes so a value straddling a chunk edge
+            // is fully readable in one read; emitLen tiles the region without
+            // overlap so each absolute address is emitted exactly once.
+            auto chunkList = ComputeScanChunks(r.size, kChunk, elemLen);
 
-            size_t scanLen;
-            if (type == ValueType::String)
-                scanLen = (r.size >= strLen) ? r.size - strLen + 1 : 0;
-            else if (type == ValueType::AOB)
-                scanLen = (r.size >= patternLen) ? r.size - patternLen + 1 : 0;
-            else
-                scanLen = (r.size >= vsz) ? r.size - vsz + 1 : 0;
-
-            for (size_t off = 0; off < scanLen; off++) {
-                if (off % 4096 == 0 && !m_scanning.load(std::memory_order_relaxed)) goto scan_done;
-                // Skip offsets outside the restricted scan range
-                if (m_scanSize > 0) {
-                    uintptr_t addr = r.base + off;
-                    if (addr < m_scanBase || addr + vsz > m_scanBase + m_scanSize) continue;
+            std::vector<uint8_t> data;
+            for (auto& ck : chunkList) {
+                uintptr_t chunkBase = r.base + ck.offset;
+                data.resize(ck.readLen);
+                if (!m_pm->Read(chunkBase, data.data(), ck.readLen)) {
+                    continue; // chunk unreadable; skip but keep scanning others
                 }
-                bool match = false;
-                const uint8_t* ptr = data.data() + off;
 
-                if (type == ValueType::String) {
-                    match = (memcmp(ptr, m_searchString.data(), strLen) == 0);
-                } else if (type == ValueType::AOB) {
-                    match = true;
-                    for (size_t i = 0; i < patternLen; i++) {
-                        if (m_aobPattern.mask[i] && ptr[i] != m_aobPattern.bytes[i]) {
-                            match = false;
+                // Only emit within the non-overlapping head of this chunk.
+                size_t readable = (ck.readLen >= elemLen) ? ck.readLen - elemLen + 1 : 0;
+                size_t scanLen = std::min(ck.emitLen, readable);
+
+                for (size_t off = 0; off < scanLen; off++) {
+                    if (off % 4096 == 0 && !m_scanning.load(std::memory_order_relaxed)) goto scan_done;
+                    uintptr_t addr = chunkBase + off;
+                    // Skip offsets outside the restricted scan range
+                    if (m_scanSize > 0) {
+                        if (addr < m_scanBase || addr + vsz > m_scanBase + m_scanSize) continue;
+                    }
+                    bool match = false;
+                    const uint8_t* ptr = data.data() + off;
+
+                    if (type == ValueType::String) {
+                        match = (memcmp(ptr, m_searchString.data(), strLen) == 0);
+                    } else if (type == ValueType::AOB) {
+                        match = true;
+                        for (size_t i = 0; i < patternLen; i++) {
+                            if (m_aobPattern.mask[i] && ptr[i] != m_aobPattern.bytes[i]) {
+                                match = false;
+                                break;
+                            }
+                        }
+                    } else if (scanType == 0) {
+                        match = (memcmp(ptr, targetBuf, vsz) == 0);            // exact
+                    } else if (IsIntegerValueType()) {
+                        // Full-width unsigned integer comparison — no double
+                        // precision loss for Qword / large Dword values.
+                        uint64_t curVal = ToUInt64(ptr);
+                        switch (scanType) {
+                        case 1: match = (curVal > targetU); break;             // bigger
+                        case 2: match = (curVal < targetU); break;             // smaller
+                        case 3: {                                              // between
+                            uint64_t lo = std::min(targetU, target2U);
+                            uint64_t hi = std::max(targetU, target2U);
+                            match = (curVal >= lo && curVal <= hi);
                             break;
                         }
+                        }
+                    } else {
+                        double curVal = ToDouble(ptr);
+                        switch (scanType) {
+                        case 1: match = (curVal > targetVal); break;           // bigger
+                        case 2: match = (curVal < targetVal); break;           // smaller
+                        case 3: {                                              // between
+                            double lo = std::min(targetVal, target2Val);
+                            double hi = std::max(targetVal, target2Val);
+                            match = (curVal >= lo && curVal <= hi);
+                            break;
+                        }
+                        }
                     }
-                } else if (scanType == 0) {
-                    match = (memcmp(ptr, targetBuf, vsz) == 0);            // exact
-                } else if (IsIntegerValueType()) {
-                    // Full-width unsigned integer comparison — no double
-                    // precision loss for Qword / large Dword values.
-                    uint64_t curVal = ToUInt64(ptr);
-                    switch (scanType) {
-                    case 1: match = (curVal > targetU); break;             // bigger
-                    case 2: match = (curVal < targetU); break;             // smaller
-                    case 3: {                                              // between
-                        uint64_t lo = std::min(targetU, target2U);
-                        uint64_t hi = std::max(targetU, target2U);
-                        match = (curVal >= lo && curVal <= hi);
-                        break;
-                    }
-                    }
-                } else {
-                    double curVal = ToDouble(ptr);
-                    switch (scanType) {
-                    case 1: match = (curVal > targetVal); break;           // bigger
-                    case 2: match = (curVal < targetVal); break;           // smaller
-                    case 3: {                                              // between
-                        double lo = std::min(targetVal, target2Val);
-                        double hi = std::max(targetVal, target2Val);
-                        match = (curVal >= lo && curVal <= hi);
-                        break;
-                    }
+
+                    if (match) {
+                        localResults.push_back(addr);
+                        if (localResults.size() >= 5000000) goto scan_done;
                     }
                 }
 
-                if (match) {
-                    localResults.push_back(r.base + off);
-                    if (localResults.size() >= 5000000) goto scan_done;
-                }
+                m_cachedResultCount.store(localResults.size(), std::memory_order_relaxed);
+                if (!m_scanning.load(std::memory_order_relaxed)) goto scan_done;
             }
 
             m_progress = (float)(ri + 1) / totalRegions;
@@ -408,7 +442,14 @@ bool Scanner::NextScanWorker(int nextScanType,
                 continue;
             }
 
-            size_t scanLen = (current.size() >= vsz) ? current.size() - vsz + 1 : 0;
+            // Chunked snapshots overlap the next chunk by (vsz - 1) bytes so a
+            // value straddling the boundary stays readable; only emit the
+            // non-overlapping head (emitLen offsets) so each absolute address
+            // is produced exactly once. emitLen == 0 => legacy non-chunked
+            // snapshot: emit every fully-readable offset.
+            size_t readable = (current.size() >= vsz) ? current.size() - vsz + 1 : 0;
+            size_t scanLen = (snap.emitLen > 0) ? std::min(snap.emitLen, readable)
+                                                : readable;
             for (size_t off = 0; off < scanLen; off++) {
                 if (off % 4096 == 0 && !m_scanning.load(std::memory_order_relaxed)) goto snap_done;
                 // Skip offsets outside the restricted scan range

@@ -12,12 +12,14 @@
 // ============================================================
 #include "scanner.h"
 #include "parse_utils.h"
+#include "scan_chunk.h"
 #include "types.h"
 
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <vector>
 
 static int g_failures = 0;
 static int g_checks = 0;
@@ -273,11 +275,115 @@ static void test_plain_hex_edge() {
     CHECK(ParsePlainHexAddress("   ") == 0ull);
 }
 
+// ============================================================
+// ComputeScanChunks (backs the chunked large-region scan)
+// ============================================================
+
+// Verify that a chunk layout covers every matchable element offset in the
+// region exactly once, that no chunk emits past what it can fully read, and
+// that read/emit stay within bounds.
+static void verify_chunk_coverage(size_t regionSize, size_t chunkSize, size_t elemLen) {
+    auto chunks = ComputeScanChunks(regionSize, chunkSize, elemLen);
+
+    size_t expectedEmit = (regionSize >= elemLen) ? (regionSize - elemLen + 1) : 0;
+    if (expectedEmit == 0) {
+        CHECK(chunks.empty());
+        return;
+    }
+
+    // Reconstruct the set of absolute element offsets emitted, checking for
+    // duplicates and gaps.
+    std::vector<char> covered(expectedEmit, 0);
+    size_t totalEmit = 0;
+    for (auto& c : chunks) {
+        // Chunk must stay within the region.
+        CHECK(c.offset + c.readLen <= regionSize);
+        // A chunk must be able to fully read every element it emits.
+        CHECK(c.readLen >= elemLen);
+        size_t readable = c.readLen - elemLen + 1;
+        CHECK(c.emitLen <= readable);
+        // No chunk larger than chunkSize.
+        CHECK(c.readLen <= chunkSize);
+
+        for (size_t k = 0; k < c.emitLen; k++) {
+            size_t absOff = c.offset + k;
+            CHECK(absOff < expectedEmit);   // in matchable range
+            if (absOff < expectedEmit) {
+                CHECK(covered[absOff] == 0); // emitted exactly once (no dupes)
+                covered[absOff] = 1;
+            }
+        }
+        totalEmit += c.emitLen;
+    }
+
+    CHECK(totalEmit == expectedEmit);
+    for (size_t i = 0; i < expectedEmit; i++) CHECK(covered[i] == 1); // no gaps
+}
+
+static void test_compute_scan_chunks() {
+    // Degenerate inputs -> empty layout.
+    CHECK(ComputeScanChunks(0, 64, 4).empty());
+    CHECK(ComputeScanChunks(100, 0, 4).empty());
+    CHECK(ComputeScanChunks(100, 64, 0).empty());
+    CHECK(ComputeScanChunks(3, 64, 4).empty());       // region smaller than element
+    CHECK(ComputeScanChunks(100, 2, 4).empty());      // chunk smaller than element
+
+    // Region fits in a single chunk.
+    {
+        auto c = ComputeScanChunks(1000, 4096, 4);
+        CHECK(c.size() == 1);
+        CHECK(c[0].offset == 0);
+        CHECK(c[0].readLen == 1000);
+        CHECK(c[0].emitLen == 1000 - 4 + 1);
+    }
+
+    // The headline case from the task: a 300MB region with a 64MB chunk and a
+    // 4-byte value must produce exactly 5 chunks, and a value straddling a
+    // 64MB boundary must be emitted by exactly one chunk (and be fully
+    // readable there). Coverage/no-dupe over the whole 300MB range is verified
+    // separately via scaled analogues below to avoid multi-hundred-MB test
+    // allocations — the chunk math is scale-independent.
+    {
+        const size_t MB = 1024 * 1024;
+        auto c = ComputeScanChunks(300 * MB, 64 * MB, 4);
+        CHECK(c.size() == 5);
+
+        // Each internal 64MB boundary must be crossed by an element that lands
+        // in exactly one chunk's emit range and is fully readable there.
+        for (int b = 1; b <= 4; b++) {
+            size_t straddle = (size_t)b * 64 * MB - 2; // element crosses the edge
+            int hits = 0;
+            for (auto& ch : c) {
+                if (straddle >= ch.offset && straddle < ch.offset + ch.emitLen) {
+                    hits++;
+                    CHECK(straddle - ch.offset + 4 <= ch.readLen); // fully readable
+                }
+            }
+            CHECK(hits == 1); // emitted exactly once
+        }
+    }
+
+    // Scaled analogues of the large-region layout (chunkSize=64) plus small
+    // sizes and element widths, including exact multiples and off-by-one
+    // boundaries, all verified for exact single coverage with no gaps.
+    verify_chunk_coverage(300, 64, 4);  // scaled 300MB/64MB/4 -> 5 chunks
+    verify_chunk_coverage(64, 64, 4);   // exactly one chunk
+    verify_chunk_coverage(65, 64, 4);   // spills one element past a chunk
+    verify_chunk_coverage(128, 64, 8);
+    verify_chunk_coverage(128, 64, 1);
+    verify_chunk_coverage(100, 16, 4);
+    verify_chunk_coverage(100, 16, 1);
+    verify_chunk_coverage(17, 16, 4);   // spills just past one chunk
+    verify_chunk_coverage(33, 16, 4);
+    verify_chunk_coverage(16, 16, 16);  // element == chunk == region
+}
+
 int main() {
     test_parse_aob();
     test_parse_value_to_bytes();
     test_address_parsing();
     test_plain_hex_edge();
+    test_compute_scan_chunks();
 
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     if (g_failures == 0) {
