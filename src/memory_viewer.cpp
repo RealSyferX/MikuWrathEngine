@@ -784,12 +784,14 @@ void MemoryViewer::RenderHex(Gdiplus::Graphics* g, RECT& rc) {
         int pos = snprintf(out, sizeof(out), "%-30.30s  ", addrStr.c_str());
         for (int col = 0; col < m_hexCols; col++)
             pos += snprintf(out+pos, sizeof(out)-pos, "%02X ", buf[line*m_hexCols+col]);
-        out[pos++] = ' '; out[pos++] = '|';
+        if (pos < (int)sizeof(out)-1) out[pos++] = ' ';
+        if (pos < (int)sizeof(out)-1) out[pos++] = '|';
         for (int col = 0; col < m_hexCols; col++) {
             char c = (char)buf[line*m_hexCols+col];
-            out[pos++] = (c >= 32 && c < 127) ? c : '.';
+            if (pos < (int)sizeof(out)-1) out[pos++] = (c >= 32 && c < 127) ? c : '.';
         }
-        out[pos++] = '|'; out[pos] = '\0';
+        if (pos < (int)sizeof(out)-1) out[pos++] = '|';
+        out[std::min(pos, (int)sizeof(out)-1)] = '\0';
 
         // Draw selection highlight BEFORE text so the text renders on top
         if (m_hexEditing && line == m_hexSelLine &&
