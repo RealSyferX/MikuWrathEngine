@@ -174,11 +174,10 @@ static void test_parse_value_to_bytes() {
     CHECK(ParseValueToBytes(ValueType::Word, "0xBEEF", buf, 2, true));
     CHECK(ReadLE(buf, 2) == 0xBEEFull);
 
-    // Negative numeric input: std::stoul/std::stoull accept a leading '-' and
-    // negate in unsigned arithmetic (matching strtoul/strtoull). "-1" therefore
-    // wraps to the all-ones value of the promoted unsigned long / long long,
-    // which is then truncated to the target width. Pin this CURRENT behavior.
-    // (unsigned long is 32-bit on Windows: stoul("-1") == 0xFFFFFFFF.)
+    // Negative decimal input is parsed with the signed counterpart (std::stoll)
+    // and reinterpreted into the fixed-width unsigned target via two's-complement
+    // truncation of the low N bytes. "-1" therefore yields all-ones at EVERY
+    // width, consistently (independent of the platform's unsigned-long size).
     memset(buf, 0, sizeof(buf));
     CHECK(ParseValueToBytes(ValueType::Byte, "-1", buf, 1, false));
     CHECK(buf[0] == 0xFF);
@@ -188,10 +187,54 @@ static void test_parse_value_to_bytes() {
     memset(buf, 0, sizeof(buf));
     CHECK(ParseValueToBytes(ValueType::Dword, "-1", buf, 4, false));
     CHECK(ReadLE(buf, 4) == 0xFFFFFFFFull);
-    // Qword uses std::stoull (unsigned long long, 64-bit): "-1" -> all ones.
     memset(buf, 0, sizeof(buf));
     CHECK(ParseValueToBytes(ValueType::Qword, "-1", buf, 8, false));
     CHECK(ReadLE(buf, 8) == 0xFFFFFFFFFFFFFFFFull);
+
+    // Byte signed boundaries: -128 -> 0x80, 127 -> 0x7F, -127 -> 0x81.
+    memset(buf, 0, sizeof(buf));
+    CHECK(ParseValueToBytes(ValueType::Byte, "-128", buf, 1, false));
+    CHECK(buf[0] == 0x80);
+    memset(buf, 0, sizeof(buf));
+    CHECK(ParseValueToBytes(ValueType::Byte, "127", buf, 1, false));
+    CHECK(buf[0] == 0x7F);
+    memset(buf, 0, sizeof(buf));
+    CHECK(ParseValueToBytes(ValueType::Byte, "-127", buf, 1, false));
+    CHECK(buf[0] == 0x81);
+
+    // Word signed boundary: -32768 -> 0x8000.
+    memset(buf, 0, sizeof(buf));
+    CHECK(ParseValueToBytes(ValueType::Word, "-32768", buf, 2, false));
+    CHECK(ReadLE(buf, 2) == 0x8000ull);
+
+    // Dword negative: -256 -> 0xFFFFFF00 (two's complement of 256).
+    memset(buf, 0, sizeof(buf));
+    CHECK(ParseValueToBytes(ValueType::Dword, "-256", buf, 4, false));
+    CHECK(ReadLE(buf, 4) == 0xFFFFFF00ull);
+
+    // Negative Qword: -2 -> 0xFFFFFFFFFFFFFFFE, and INT64_MIN -> 0x8000...0000.
+    memset(buf, 0, sizeof(buf));
+    CHECK(ParseValueToBytes(ValueType::Qword, "-2", buf, 8, false));
+    CHECK(ReadLE(buf, 8) == 0xFFFFFFFFFFFFFFFEull);
+    memset(buf, 0, sizeof(buf));
+    CHECK(ParseValueToBytes(ValueType::Qword, "-9223372036854775808", buf, 8, false));
+    CHECK(ReadLE(buf, 8) == 0x8000000000000000ull);
+
+    // Leading whitespace before the sign is tolerated (isspace skip).
+    memset(buf, 0, sizeof(buf));
+    CHECK(ParseValueToBytes(ValueType::Dword, "  -1", buf, 4, false));
+    CHECK(ReadLE(buf, 4) == 0xFFFFFFFFull);
+
+    // A huge negative beyond int64 range: std::stoll throws std::out_of_range,
+    // caught by the existing handler -> returns false (no crash).
+    CHECK(!ParseValueToBytes(ValueType::Qword, "-99999999999999999999999", buf, 8, false));
+
+    // Large positive Qword above INT64_MAX must still parse via the unsigned
+    // path (not forced through signed stoll). 0xFFFFFFFFFFFFFFFF was already
+    // checked above; re-confirm a value just over INT64_MAX round-trips.
+    memset(buf, 0, sizeof(buf));
+    CHECK(ParseValueToBytes(ValueType::Qword, "9223372036854775809", buf, 8, false));
+    CHECK(ReadLE(buf, 8) == 9223372036854775809ull);
 }
 
 // ============================================================

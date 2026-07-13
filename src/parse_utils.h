@@ -14,29 +14,51 @@
 // exercised by the unit test target without a live process.
 // ============================================================
 
+// True when 'str', after skipping leading whitespace, begins with a '-' sign.
+// Used to route signed decimal input through the signed parser so the result
+// is consistent across integer widths regardless of platform unsigned-long size.
+inline bool HasLeadingMinus(const std::string& str) {
+    size_t i = 0;
+    while (i < str.size() && isspace((unsigned char)str[i])) ++i;
+    return i < str.size() && str[i] == '-';
+}
+
 // Parse a numeric string into 'size' raw little-endian bytes at 'out' per the
 // given ValueType. Returns false on parse failure (non-numeric, out of range).
 // Integer values wider than the target type are truncated to the low bytes,
 // matching the historical C-style cast behavior (e.g. Byte "256" -> 0).
+//
+// Signed decimal input (a leading '-') is parsed with the signed counterpart
+// (std::stoll) and reinterpreted into the fixed-width unsigned target via
+// two's-complement truncation of the low N bytes. This makes negative values
+// consistent across widths (e.g. -1 -> 0xFF / 0xFFFF / 0xFFFFFFFF /
+// 0xFFFFFFFFFFFFFFFF, -128 Byte -> 0x80). Positive decimal and all hex input
+// retain the unsigned path so large unsigned values (e.g. a Qword above
+// INT64_MAX) still parse correctly.
 inline bool ParseValueToBytes(ValueType type, const std::string& str,
                               uint8_t* out, size_t /*size*/, bool hex) {
     int base = hex ? 16 : 10;
+    bool neg = !hex && HasLeadingMinus(str);
     try {
         switch (type) {
         case ValueType::Byte: {
-            auto v = (uint8_t)std::stoul(str, nullptr, base);
+            auto v = neg ? (uint8_t)(uint64_t)std::stoll(str, nullptr, 10)
+                         : (uint8_t)std::stoul(str, nullptr, base);
             memcpy(out, &v, 1); return true;
         }
         case ValueType::Word: {
-            auto v = (uint16_t)std::stoul(str, nullptr, base);
+            auto v = neg ? (uint16_t)(uint64_t)std::stoll(str, nullptr, 10)
+                         : (uint16_t)std::stoul(str, nullptr, base);
             memcpy(out, &v, 2); return true;
         }
         case ValueType::Dword: {
-            auto v = (uint32_t)std::stoul(str, nullptr, base);
+            auto v = neg ? (uint32_t)(uint64_t)std::stoll(str, nullptr, 10)
+                         : (uint32_t)std::stoul(str, nullptr, base);
             memcpy(out, &v, 4); return true;
         }
         case ValueType::Qword: {
-            auto v = (uint64_t)std::stoull(str, nullptr, base);
+            auto v = neg ? (uint64_t)std::stoll(str, nullptr, 10)
+                         : (uint64_t)std::stoull(str, nullptr, base);
             memcpy(out, &v, 8); return true;
         }
         case ValueType::Float32: {
