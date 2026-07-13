@@ -232,8 +232,9 @@ void MemoryViewer::ScrollDisasm(int lines) {
                 if (m_disasmView.size() < 16 && !m_disasmView.empty()) {
                     uintptr_t nextAddr = m_disasmView.back().address + m_disasmView.back().size;
                     uint8_t buf[1024];
-                    if (m_pm->Read(nextAddr, buf, sizeof(buf))) {
-                        auto more = m_dis->Disassemble(nextAddr, buf, sizeof(buf), 32);
+                    size_t got = m_pm->ReadPartial(nextAddr, buf, sizeof(buf));
+                    if (got > 0) {
+                        auto more = m_dis->Disassemble(nextAddr, buf, got, 32);
                         m_disasmView.insert(m_disasmView.end(), more.begin(), more.end());
                     }
                 }
@@ -242,8 +243,9 @@ void MemoryViewer::ScrollDisasm(int lines) {
                 m_disasmAddr = m_disasmView[0].address + m_disasmView[0].size;
                 m_disasmView.clear();
                 uint8_t buf[1024];
-                if (m_pm->Read(m_disasmAddr, buf, sizeof(buf))) {
-                    m_disasmView = m_dis->Disassemble(m_disasmAddr, buf, sizeof(buf), 64);
+                size_t got = m_pm->ReadPartial(m_disasmAddr, buf, sizeof(buf));
+                if (got > 0) {
+                    m_disasmView = m_dis->Disassemble(m_disasmAddr, buf, got, 64);
                 }
             } else {
                 break; // empty, can't scroll
@@ -327,7 +329,8 @@ void MemoryViewer::ShowContextMenu(int x, int y, uintptr_t addr, bool isDisasm, 
         m_sigLen = std::min((int)instSize * 4, MAX_SIG_BYTES);
         if (m_sigLen < 8) m_sigLen = 16;
         if (m_pm && m_pm->IsOpen()) {
-            m_pm->Read(m_sigAddr, m_sigBytes, m_sigLen);
+            size_t got = m_pm->ReadPartial(m_sigAddr, m_sigBytes, m_sigLen);
+            if (got < (size_t)m_sigLen) memset(m_sigBytes + got, 0, m_sigLen - got);
         }
         memset(m_sigWildcard, 0, sizeof(m_sigWildcard));
         m_showSigMaker = true;
@@ -927,7 +930,8 @@ void MemoryViewer::RenderSigMaker(Gdiplus::Graphics* g, RECT& rc) {
 
     // Re-read bytes each frame to keep the display live
     if (m_pm && m_pm->IsOpen()) {
-        m_pm->Read(m_sigAddr, m_sigBytes, m_sigLen);
+        size_t got = m_pm->ReadPartial(m_sigAddr, m_sigBytes, m_sigLen);
+        if (got < (size_t)m_sigLen) memset(m_sigBytes + got, 0, m_sigLen - got);
     }
 
     // Byte grid — 16 per row, each cell clickable to toggle wildcard

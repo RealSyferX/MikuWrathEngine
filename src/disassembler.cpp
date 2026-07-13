@@ -62,9 +62,10 @@ uintptr_t Disassembler::FindPreviousInstruction(uintptr_t address,
     if (backSize == 0) return address;
 
     std::vector<uint8_t> buf(backSize);
-    if (!pm->Read(backAddr, buf.data(), backSize)) return address;
+    size_t got = pm->ReadPartial(backAddr, buf.data(), backSize);
+    if (got == 0) return address;
 
-    auto insts = Disassemble(backAddr, buf.data(), backSize, 64);
+    auto insts = Disassemble(backAddr, buf.data(), got, 64);
 
     uintptr_t prevStart = backAddr;
     for (auto& inst : insts) {

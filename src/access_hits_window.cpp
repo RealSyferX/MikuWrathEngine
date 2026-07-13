@@ -238,8 +238,9 @@ void AccessHitsWindow::OnPaint(Gdiplus::Graphics* g, int w, int h) {
             char disasmStr[256] = {};
             if (m_dis && m_dis->IsInitialized() && m_pm && m_pm->IsOpen()) {
                 uint8_t dbuf[16];
-                if (m_pm->Read(hits[idx].instruction, dbuf, sizeof(dbuf))) {
-                    auto insts = m_dis->Disassemble(hits[idx].instruction, dbuf, sizeof(dbuf), 1);
+                size_t got = m_pm->ReadPartial(hits[idx].instruction, dbuf, sizeof(dbuf));
+                if (got > 0) {
+                    auto insts = m_dis->Disassemble(hits[idx].instruction, dbuf, got, 1);
                     if (!insts.empty()) {
                         snprintf(disasmStr, sizeof(disasmStr), "%s %s",
                                  insts[0].mnemonic, insts[0].opStr);
