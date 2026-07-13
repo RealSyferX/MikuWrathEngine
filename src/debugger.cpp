@@ -253,86 +253,120 @@ bool Debugger::WaitForReady(int timeoutMs) {
 }
 
 int Debugger::AddBreakpoint(uintptr_t addr, BreakType type, size_t size, const char* label) {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    int id;
+    bool needApply = false;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
 
-    Breakpoint bp;
-    bp.address = addr;
-    bp.type = type;
-    bp.size = size;
-    if (label) {
-        strncpy(bp.label, label, sizeof(bp.label) - 1);
-        bp.label[sizeof(bp.label) - 1] = '\0';
-    }
+        Breakpoint bp;
+        bp.address = addr;
+        bp.type = type;
+        bp.size = size;
+        if (label) {
+            strncpy(bp.label, label, sizeof(bp.label) - 1);
+            bp.label[sizeof(bp.label) - 1] = '\0';
+        }
 
-    // Decide: hardware or INT3
-    if (type == BreakType::Execute && m_type == DebuggerType::Windows) {
-        // INT3 breakpoint
-        bp.hardware = false;
-        uint8_t orig = 0;
-        if (m_pm->Read(addr, &orig, 1)) {
-            bp.originalByte = orig;
-            uint8_t int3 = 0xCC;
-            if (m_pm->Write(addr, &int3, 1)) {
-                bp.bpActive = true;
+        // Decide: hardware or INT3
+        if (type == BreakType::Execute && m_type == DebuggerType::Windows) {
+            // INT3 breakpoint
+            bp.hardware = false;
+            uint8_t orig = 0;
+            if (m_pm->Read(addr, &orig, 1)) {
+                bp.originalByte = orig;
+                uint8_t int3 = 0xCC;
+                if (m_pm->Write(addr, &int3, 1)) {
+                    bp.bpActive = true;
+                }
+            }
+        } else {
+            // Hardware breakpoint
+            int slot = FindFreeHwSlot();
+            if (slot < 0) return -1; // No free slots
+            bp.hardware = true;
+            bp.hwSlot = slot;
+            m_hwSlotUsed[slot] = 1;
+            if (m_attached.load()) {
+                m_hwBpDirty.store(true);
+            } else {
+                // Defer the re-apply until after releasing m_mutex —
+                // ApplyHardwareBreakpointsToAll() locks m_mutex itself and
+                // m_mutex is non-recursive, so calling it here would deadlock.
+                needApply = true;
             }
         }
-    } else {
-        // Hardware breakpoint
-        int slot = FindFreeHwSlot();
-        if (slot < 0) return -1; // No free slots
-        bp.hardware = true;
-        bp.hwSlot = slot;
-        m_hwSlotUsed[slot] = 1;
-        if (m_attached.load()) {
-            m_hwBpDirty.store(true);
-        } else {
-            ApplyHardwareBreakpointsToAll();
-        }
+
+        id = m_nextBpId++;
+        m_breakpoints[id] = bp;
     }
 
-    int id = m_nextBpId++;
-    m_breakpoints[id] = bp;
+    // Lock released. Apply now (if detached) so the new breakpoint takes effect.
+    if (needApply) {
+        ApplyHardwareBreakpointsToAll();
+    }
     return id;
 }
 
 bool Debugger::RemoveBreakpoint(int id) {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    auto it = m_breakpoints.find(id);
-    if (it == m_breakpoints.end()) return false;
+    bool needApply = false;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_breakpoints.find(id);
+        if (it == m_breakpoints.end()) return false;
 
-    Breakpoint& bp = it->second;
-    if (bp.hardware) {
-        m_hwSlotUsed[bp.hwSlot] = 0;
-        if (m_attached.load()) {
-            m_hwBpDirty.store(true);
+        Breakpoint& bp = it->second;
+        if (bp.hardware) {
+            m_hwSlotUsed[bp.hwSlot] = 0;
+            if (m_attached.load()) {
+                m_hwBpDirty.store(true);
+            } else {
+                // Defer the re-apply until after releasing m_mutex —
+                // ApplyHardwareBreakpointsToAll() locks m_mutex itself and
+                // m_mutex is non-recursive, so calling it here would deadlock.
+                needApply = true;
+            }
         } else {
-            ApplyHardwareBreakpointsToAll();
+            // Restore original byte
+            if (bp.bpActive) {
+                m_pm->Write(bp.address, &bp.originalByte, 1);
+            }
         }
-    } else {
-        // Restore original byte
-        if (bp.bpActive) {
-            m_pm->Write(bp.address, &bp.originalByte, 1);
-        }
+
+        m_breakpoints.erase(it);
     }
 
-    m_breakpoints.erase(it);
+    // Lock released. Apply now (if detached) so the removal takes effect.
+    if (needApply) {
+        ApplyHardwareBreakpointsToAll();
+    }
     return true;
 }
 
 bool Debugger::ClearAllBreakpoints() {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    for (auto& [id, bp] : m_breakpoints) {
-        if (bp.hardware) {
-            m_hwSlotUsed[bp.hwSlot] = 0;
-        } else if (bp.bpActive) {
-            m_pm->Write(bp.address, &bp.originalByte, 1);
+    bool needApply = false;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (auto& [id, bp] : m_breakpoints) {
+            if (bp.hardware) {
+                m_hwSlotUsed[bp.hwSlot] = 0;
+            } else if (bp.bpActive) {
+                m_pm->Write(bp.address, &bp.originalByte, 1);
+            }
+        }
+        m_breakpoints.clear();
+        memset(m_hwSlotUsed, 0, sizeof(m_hwSlotUsed));
+        if (m_attached.load()) {
+            m_hwBpDirty.store(true);
+        } else {
+            // Defer the re-apply until after releasing m_mutex —
+            // ApplyHardwareBreakpointsToAll() locks m_mutex itself and
+            // m_mutex is non-recursive, so calling it here would deadlock.
+            needApply = true;
         }
     }
-    m_breakpoints.clear();
-    memset(m_hwSlotUsed, 0, sizeof(m_hwSlotUsed));
-    if (m_attached.load()) {
-        m_hwBpDirty.store(true);
-    } else {
+
+    // Lock released. Apply now (if detached) so the cleared state takes effect.
+    if (needApply) {
         ApplyHardwareBreakpointsToAll();
     }
     return true;
