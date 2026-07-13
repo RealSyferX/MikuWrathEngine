@@ -62,6 +62,7 @@ if(BUILD_TESTS)
         tests/test_main.cpp
         src/scanner.cpp          # provides Scanner::ParseAOB
         src/process_manager.cpp  # provides ProcessManager symbols pulled in by scanner
+        src/address_table.cpp    # provides AddressTable::Save/Load (MWT2 persistence)
     )
     target_include_directories(mwe_tests PRIVATE
         src

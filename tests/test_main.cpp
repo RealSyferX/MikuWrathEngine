@@ -16,6 +16,7 @@
 #include "scan_chunk.h"
 #include "types.h"
 #include "settings.h"
+#include "address_table.h"
 
 #include <cstdio>
 #include <cstdint>
@@ -538,6 +539,192 @@ static void test_settings() {
     std::remove(kPath);
 }
 
+// ============================================================
+// AddressTable::Save / Load (address_table.cpp)
+//
+// Tab-separated MWT2 format with a legacy space-separated fallback.
+// Save writes:
+//     "MWT2\t1\n"
+//     <type>\t<address(dec)>\t<frozen 0|1>\t<editValue>\t<description>\n
+// where control chars (\t \r \n) in editValue/description are replaced
+// with spaces before writing. Load validates 0 <= type <= AOB and skips
+// rows whose numeric fields fail to parse (try/catch). The legacy branch
+// reads whitespace-separated "type addr frozen val desc".
+// ============================================================
+static void test_address_table() {
+    const char* kPath = "mwe_test_addrtable.mwt";
+
+    // ---- Round-trip: distinct types, frozen flags, values, descriptions ----
+    {
+        AddressTable out;
+        out.Add(0x00400000, ValueType::Byte, "byte_entry");
+        out.Add(0x140001000ull, ValueType::Dword, "dword_entry");
+        out.Add(0x7FF612340000ull, ValueType::Qword, "qword_entry");
+        out.Add(0xDEAD0000, ValueType::AOB, "aob_entry");
+
+        auto& es = out.Entries();
+        CHECK(es.size() == 4);
+        std::strcpy(es[0].editValue, "42");
+        es[0].frozen = true;
+        std::strcpy(es[1].editValue, "1000");
+        es[1].frozen = false;
+        std::strcpy(es[2].editValue, "9007199254740993");
+        es[2].frozen = true;
+        std::strcpy(es[3].editValue, "90 90 CC ??");
+        es[3].frozen = false;
+
+        out.Save(kPath);
+
+        AddressTable in;
+        in.Load(kPath);
+        CHECK(in.Count() == 4);
+        auto& r = in.Entries();
+        CHECK(r.size() == 4);
+
+        CHECK(r[0].address == 0x00400000);
+        CHECK(r[0].type == ValueType::Byte);
+        CHECK(r[0].frozen == true);
+        CHECK(std::strcmp(r[0].description, "byte_entry") == 0);
+        CHECK(std::strcmp(r[0].editValue, "42") == 0);
+
+        CHECK(r[1].address == 0x140001000ull);
+        CHECK(r[1].type == ValueType::Dword);
+        CHECK(r[1].frozen == false);
+        CHECK(std::strcmp(r[1].description, "dword_entry") == 0);
+        CHECK(std::strcmp(r[1].editValue, "1000") == 0);
+
+        CHECK(r[2].address == 0x7FF612340000ull);
+        CHECK(r[2].type == ValueType::Qword);
+        CHECK(r[2].frozen == true);
+        CHECK(std::strcmp(r[2].description, "qword_entry") == 0);
+        CHECK(std::strcmp(r[2].editValue, "9007199254740993") == 0);
+
+        CHECK(r[3].address == 0xDEAD0000);
+        CHECK(r[3].type == ValueType::AOB);
+        CHECK(r[3].frozen == false);
+        CHECK(std::strcmp(r[3].description, "aob_entry") == 0);
+        CHECK(std::strcmp(r[3].editValue, "90 90 CC ??") == 0);
+    }
+
+    // ---- Sanitization: embedded \t and \n become spaces, no field desync ----
+    {
+        AddressTable out;
+        out.Add(0x1000, ValueType::Dword, "");   // desc auto-filled with "0x1000"
+        auto& es = out.Entries();
+        CHECK(es.size() == 1);
+        // Embed a tab and a newline in the description; the writer must replace
+        // them with spaces so the following field (none here) and the record
+        // boundary do not desync.
+        std::strcpy(es[0].description, "desc\twith\nctrl");
+        std::strcpy(es[0].editValue, "val\there");
+        es[0].frozen = true;
+
+        out.Save(kPath);
+
+        AddressTable in;
+        in.Load(kPath);
+        CHECK(in.Count() == 1);
+        auto& r = in.Entries();
+        CHECK(r.size() == 1);
+        // Control characters replaced by spaces on the way out.
+        CHECK(std::strcmp(r[0].description, "desc with ctrl") == 0);
+        CHECK(std::strcmp(r[0].editValue, "val here") == 0);
+        // Fields did not desync: address/type/frozen still intact.
+        CHECK(r[0].address == 0x1000);
+        CHECK(r[0].type == ValueType::Dword);
+        CHECK(r[0].frozen == true);
+    }
+
+    // ---- Type-range validation: type 99 and -1 rows are skipped ----
+    {
+        // AOB == 7, so 99 and -1 are out of range and must be dropped, while
+        // the two valid rows (type 0 Byte, type 2 Dword) survive in order.
+        write_file(kPath,
+            "MWT2\t1\n"
+            "0\t4096\t0\t11\tvalid_byte\n"
+            "99\t8192\t0\t22\tbad_high\n"
+            "2\t12288\t1\t33\tvalid_dword\n"
+            "-1\t16384\t0\t44\tbad_neg\n");
+        AddressTable in;
+        in.Load(kPath);
+        CHECK(in.Count() == 2);
+        auto& r = in.Entries();
+        CHECK(r.size() == 2);
+        CHECK(r[0].type == ValueType::Byte);
+        CHECK(r[0].address == 4096);
+        CHECK(std::strcmp(r[0].description, "valid_byte") == 0);
+        CHECK(r[1].type == ValueType::Dword);
+        CHECK(r[1].address == 12288);
+        CHECK(r[1].frozen == true);
+        CHECK(std::strcmp(r[1].description, "valid_dword") == 0);
+    }
+
+    // ---- Malformed lines: non-numeric address/type skipped via try/catch ----
+    {
+        // Row 2 has a non-numeric address, row 3 a non-numeric type; both throw
+        // in std::stoi/std::stoull and are caught+skipped. The surrounding valid
+        // rows must still load.
+        write_file(kPath,
+            "MWT2\t1\n"
+            "0\t100\t0\tv1\tfirst\n"
+            "2\tNOTHEX\t0\tv2\tbad_addr\n"
+            "abc\t200\t0\tv3\tbad_type\n"
+            "3\t300\t0\tv4\tlast\n");
+        AddressTable in;
+        in.Load(kPath);
+        CHECK(in.Count() == 2);
+        auto& r = in.Entries();
+        CHECK(r.size() == 2);
+        CHECK(r[0].address == 100);
+        CHECK(std::strcmp(r[0].description, "first") == 0);
+        CHECK(r[1].address == 300);
+        CHECK(r[1].type == ValueType::Qword);
+        CHECK(std::strcmp(r[1].description, "last") == 0);
+    }
+
+    // ---- Legacy format: file NOT starting with "MWT2\t" -> legacy branch ----
+    {
+        // Legacy layout is whitespace-separated: type addr frozen val desc.
+        // The description runs to end-of-line (getline after >> ws).
+        write_file(kPath,
+            "2 1024 0 500 legacy dword entry\n"
+            "0 2048 1 7 legacy byte\n");
+        AddressTable in;
+        in.Load(kPath);
+        CHECK(in.Count() == 2);
+        auto& r = in.Entries();
+        CHECK(r.size() == 2);
+        CHECK(r[0].type == ValueType::Dword);
+        CHECK(r[0].address == 1024);
+        CHECK(r[0].frozen == false);
+        CHECK(std::strcmp(r[0].editValue, "500") == 0);
+        CHECK(std::strcmp(r[0].description, "legacy dword entry") == 0);
+        CHECK(r[1].type == ValueType::Byte);
+        CHECK(r[1].address == 2048);
+        CHECK(r[1].frozen == true);
+        CHECK(std::strcmp(r[1].editValue, "7") == 0);
+        CHECK(std::strcmp(r[1].description, "legacy byte") == 0);
+    }
+
+    // ---- Legacy format: out-of-range type is skipped ----
+    {
+        write_file(kPath,
+            "9 1024 0 500 bad_type\n"
+            "1 2048 0 3 good_word\n");
+        AddressTable in;
+        in.Load(kPath);
+        CHECK(in.Count() == 1);
+        auto& r = in.Entries();
+        CHECK(r.size() == 1);
+        CHECK(r[0].type == ValueType::Word);
+        CHECK(r[0].address == 2048);
+        CHECK(std::strcmp(r[0].description, "good_word") == 0);
+    }
+
+    // Clean up the temp file.
+    std::remove(kPath);
+}
+
 int main() {
     test_parse_aob();
     test_parse_value_to_bytes();
@@ -545,6 +732,7 @@ int main() {
     test_plain_hex_edge();
     test_compute_scan_chunks();
     test_settings();
+    test_address_table();
 
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     if (g_failures == 0) {
