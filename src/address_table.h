@@ -29,9 +29,15 @@ public:
     void SetScrollPos(int pos) { m_scrollPos = pos; }
     void ClampScroll(int maxScroll) { m_scrollPos = std::max(0, std::min(m_scrollPos, maxScroll)); }
 
+    // Last failure reported by UpdateFrozen (cleared at the start of each pass).
+    // Empty when the most recent freeze pass applied successfully.
+    const char* LastFreezeError() const { return m_lastFreezeError; }
+    bool HasFreezeError() const { return m_lastFreezeError[0] != '\0'; }
+
 private:
     std::vector<AddressEntry> m_entries;
     float m_freezeTimer = 0.0f;
     int m_selected = -1;
     int m_scrollPos = 0;
+    char m_lastFreezeError[256] = {};
 };

@@ -31,12 +31,20 @@ void AddressTable::Clear() {
 }
 
 void AddressTable::UpdateFrozen(const ProcessManager& pm, float dt) {
+    // Clear previous failure before re-evaluating so a successful pass leaves
+    // the buffer empty and the UI stops showing a stale error.
+    m_lastFreezeError[0] = '\0';
     m_freezeTimer += dt;
     if (m_freezeTimer < 0.01f) return;
     m_freezeTimer = 0.0f;
     for (auto& e : m_entries) {
         if (e.frozen && e.frozenValue[0] && !e.isEditing) {
-            ::WriteValueString(pm, e.address, e.type, e.frozenValue);
+            bool ok = ::WriteValueString(pm, e.address, e.type, e.frozenValue);
+            if (!ok) {
+                snprintf(m_lastFreezeError, sizeof(m_lastFreezeError),
+                         "Freeze write failed @ 0x%llX (type %d)",
+                         (unsigned long long)e.address, (int)e.type);
+            }
         }
     }
 }

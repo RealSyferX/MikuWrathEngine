@@ -718,7 +718,13 @@ void App::RenderAddressTable() {
         m_pendingLoadTable = true;
     }
 
-    UI::DrawText(m_ui.g, 270, ty+2, "Right-click row for options", Theme::CLR_DIM());
+    if (m_table.HasFreezeError()) {
+        // A freeze write failed this pass (closed process, unparseable value,
+        // or an unmapped/no-access address). Surface it instead of the hint.
+        UI::DrawText(m_ui.g, 270, ty+2, m_table.LastFreezeError(), Theme::CLR_RED());
+    } else {
+        UI::DrawText(m_ui.g, 270, ty+2, "Right-click row for options", Theme::CLR_DIM());
+    }
 
     UI::DrawSeparator(m_ui.g, ty + 22, rc.left, rc.right);
 
